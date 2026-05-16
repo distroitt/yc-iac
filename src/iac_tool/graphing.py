@@ -40,8 +40,8 @@ def render_dependency_graph(manifest: Manifest) -> str:
     for handler in handlers:
         style = NODE_STYLES.get(handler.resource_type, {"fillcolor": "#F3F4F6", "color": "#6B7280"})
         label = (
-            f"{handler.resource_type}\\n"
-            f"logical: {handler.logical_name}\\n"
+            f"{handler.resource_type}\n"
+            f"logical: {handler.logical_name}\n"
             f"name: {_handler_cloud_name(handler)}"
         )
         lines.append(

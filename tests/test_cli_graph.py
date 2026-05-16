@@ -71,6 +71,8 @@ def test_graph_command_outputs_dot_to_stdout(tmp_path: Path) -> None:
 
     assert result.exit_code == 0
     assert "digraph infrastructure" in result.stdout
+    assert 'label="network\\nlogical: network\\nname: oop-course-network"' in result.stdout
+    assert 'label="network\\\\nlogical: network\\\\nname: oop-course-network"' not in result.stdout
     assert '"network" -> "ssh-access";' in result.stdout
     assert '"network" -> "subnet";' in result.stdout
     assert '"ssh-access" -> "instance";' in result.stdout
@@ -89,6 +91,8 @@ def test_graph_command_writes_dot_to_file(tmp_path: Path) -> None:
     assert result.exit_code == 0
     assert output_path.exists()
     content = output_path.read_text(encoding="utf-8")
+    assert 'label="network\\nlogical: network\\nname: oop-course-network"' in content
+    assert 'label="network\\\\nlogical: network\\\\nname: oop-course-network"' not in content
     assert '"network" -> "ssh-access";' in content
     assert '"network" -> "subnet";' in content
     assert '"subnet" -> "instance";' in content
