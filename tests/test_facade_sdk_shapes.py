@@ -3,6 +3,7 @@ from yandex.cloud.compute.v1.instance_pb2 import SchedulingPolicy
 from yandex.cloud.compute.v1.instance_service_pb2 import (
     AttachedDiskSpec,
     CreateInstanceRequest,
+    GetInstanceRequest,
     NetworkInterfaceSpec,
     OneToOneNatSpec,
     PrimaryAddressSpec,
@@ -63,6 +64,13 @@ def test_nat_spec_sets_ipv4_explicitly() -> None:
     nat_spec = OneToOneNatSpec(ip_version=ipv4_value)
 
     assert nat_spec.ip_version == ipv4_value
+
+
+def test_get_instance_request_full_view_is_resolved_via_descriptor() -> None:
+    full_view = GetInstanceRequest.DESCRIPTOR.fields_by_name["view"].enum_type.values_by_name["FULL"].number
+    request = GetInstanceRequest(instance_id="instance-id", view=full_view)
+
+    assert request.view == full_view
 
 
 def test_disk_request_sdk_shapes_are_compatible() -> None:

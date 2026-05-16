@@ -565,8 +565,9 @@ class YandexCloudFacade:
 
         client = self.sdk.client(InstanceServiceStub)
         logger.info("Fetching instance %s", instance_id)
+        full_view = GetInstanceRequest.DESCRIPTOR.fields_by_name["view"].enum_type.values_by_name["FULL"].number
         try:
-            instance = client.Get(GetInstanceRequest(instance_id=instance_id, view=GetInstanceRequest.FULL))
+            instance = client.Get(GetInstanceRequest(instance_id=instance_id, view=full_view))
         except Exception as exc:
             self._raise_describe_error("instance", instance_id, exc)
 
