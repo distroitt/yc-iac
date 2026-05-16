@@ -1,0 +1,84 @@
+# Replace provider.folder_id with your real Yandex Cloud folder ID before running apply.
+provider:
+  folder_id: "b1gpsjsdnp3nrpb88sgm"
+  zone_id: "ru-central1-a"
+  project_name: "oop-course-work"
+
+networks:
+  - logical_name: "network"
+    name: "oop-course-network"
+    labels:
+      env: "demo"
+      project: "oop-course-work"
+
+security_groups:
+  - logical_name: "ssh-access"
+    name: "oop-course-ssh-access"
+    network: "network"
+    labels:
+      env: "demo"
+    ingress_rules:
+      - protocol: "TCP"
+        from_port: 22
+        to_port: 22
+        cidr_blocks:
+          - "0.0.0.0/0"
+    egress_rules:
+      - protocol: "ANY"
+        cidr_blocks:
+          - "0.0.0.0/0"
+
+subnets:
+  - logical_name: "subnet"
+    name: "oop-course-subnet"
+    network: "network"
+    cidr: "10.10.0.0/24"
+    labels:
+      env: "demo"
+
+disks:
+  - logical_name: "data-disk"
+    name: "oop-course-data-disk"
+    size_gb: 10
+    type_id: "network-hdd"
+    labels:
+      env: "demo"
+
+instances:
+  - logical_name: "instance"
+    name: "oop-course-vm"
+    subnet: "subnet"
+    platform_id: "standard-v3"
+    cores: 2
+    memory_gb: 2
+    boot_disk_gb: 10
+    disk_type: "network-hdd"
+    image_family: "ubuntu-2204-lts"
+    image_folder_id: "standard-images"
+    username: "yc-user"
+    ssh_public_key_path: "~/.ssh/id_ed25519.pub"
+    assign_public_ip: true
+    preemptible: false
+    data_disks:
+      - "data-disk"
+    security_groups:
+      - "ssh-access"
+    labels:
+      env: "demo"
+
+  - logical_name: "instance-new"
+    name: "oop-course-vm-1"
+    subnet: "subnet"
+    platform_id: "standard-v3"
+    cores: 2
+    memory_gb: 2
+    boot_disk_gb: 10
+    disk_type: "network-hdd"
+    image_family: "ubuntu-2204-lts"
+    image_folder_id: "standard-images"
+    username: "yc-user"
+    ssh_public_key_path: "~/.ssh/id_ed25519.pub"
+    assign_public_ip: true
+    preemptible: false
+    labels:
+      env: "demo"

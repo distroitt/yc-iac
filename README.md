@@ -1,0 +1,145 @@
+# IaC Tool for Yandex Cloud
+
+Учебный проект по дисциплине "Объектно-ориентированное программирование". Инструмент реализует декларативное управление инфраструктурой Yandex Cloud через официальный Python SDK `yandexcloud`.
+
+## Возможности MVP
+
+- `validate` проверяет YAML-манифест и связи между ресурсами.
+- `plan` строит план изменений по локальному `state.json`.
+- `state` показывает текущее локальное состояние, сохраненное в `state.json`.
+- `graph` генерирует граф зависимостей ресурсов в формате Graphviz DOT.
+- `apply --confirm` создает или пересоздает инфраструктуру.
+- `destroy --confirm` удаляет инфраструктуру в обратном порядке зависимостей.
+- Поддерживаются ресурсы `network`, `security_group`, `subnet`, `disk`, `instance`.
+
+## Архитектура
+
+Проект построен по цепочке:
+
+`CLI -> Manifest Loader -> Planner -> Executor -> Yandex Cloud Facade -> State Store`
+
+ООП-паттерны, которые демонстрируются в коде:
+
+- `Facade`: класс `YandexCloudFacade` скрывает детали SDK и gRPC-вызовов.
+- `Factory`: `ResourceHandlerFactory` создает обработчики ресурсов из манифеста.
+- `Command`: операции плана представлены командами `CreateResourceCommand` и `DeleteResourceCommand`.
+- `Template Method`: базовый класс `CloudResourceHandler` задает общий контракт для жизненного цикла ресурсов.
+
+## Структура проекта
+
+```text
+.
+├── docs/
+├── examples/
+├── src/iac_tool/
+└── tests/
+```
+
+## Установка
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -e ".[dev]"
+```
+
+## Аутентификация
+
+Инструмент не хранит секреты в манифесте. Поддерживаются:
+
+- `YC_IAM_TOKEN`
+- `YC_OAUTH_TOKEN`
+- `YC_SERVICE_ACCOUNT_KEY_FILE`
+- локальный JSON-файл `.iac-tool-auth.json`
+
+Пример локального auth-файла есть в `examples/auth-config.example.json`.
+
+## Пример манифеста
+
+См. `examples/sample-manifest.yaml`.
+
+Перед первым запуском убедитесь, что `provider.folder_id` содержит реальный ID вашей папки в Yandex Cloud.
+Манифест использует коллекции `networks`, `security_groups`, `subnets`, `disks`, `instances`, поэтому в одном YAML можно описывать сразу несколько ресурсов каждого типа.
+
+Полезные связи между ресурсами:
+
+- `subnets[].network` ссылается на `networks[].logical_name`
+- `security_groups[].network` ссылается на `networks[].logical_name`
+- `instances[].subnet` ссылается на `subnets[].logical_name`
+- `instances[].security_groups` ссылается на `security_groups[].logical_name`
+- `instances[].data_disks` ссылается на `disks[].logical_name`
+
+Для `security_groups` поддерживаются `ingress_rules` и `egress_rules` с полями `protocol`, `cidr_blocks`, а также необязательными `from_port` и `to_port`.
+Для `disks` поддерживаются `name`, `size_gb`, `type_id` и `labels`.
+
+## Команды CLI
+
+```bash
+iac-tool validate examples/sample-manifest.yaml
+iac-tool plan examples/sample-manifest.yaml
+iac-tool state examples/sample-manifest.yaml
+iac-tool graph examples/sample-manifest.yaml
+iac-tool apply examples/sample-manifest.yaml --confirm
+iac-tool destroy examples/sample-manifest.yaml --confirm
+```
+
+По умолчанию `state.json` создается рядом с манифестом. При необходимости путь можно переопределить через `--state-file`.
+
+Для машинной обработки состояния можно вывести сырой JSON:
+
+```bash
+iac-tool state examples/sample-manifest.yaml --json
+```
+
+Для построения графа зависимостей в стиле `terraform graph`:
+
+```bash
+iac-tool graph examples/sample-manifest.yaml --output infrastructure.dot
+dot -Tpng infrastructure.dot -o infrastructure.png
+```
+
+Команда `graph` не обращается к облаку и не требует аутентификации, она работает только по локальному манифесту.
+
+Для диагностики ошибок доступны подробные логи:
+
+```bash
+iac-tool --verbose plan examples/sample-manifest.yaml
+iac-tool --verbose --log-file ./iac-tool.log apply examples/sample-manifest.yaml --confirm
+```
+
+`--verbose` печатает подробные шаги в stderr, а `--log-file` сохраняет полный диагностический журнал в файл.
+
+## Тестирование
+
+```bash
+pytest
+```
+
+Интеграционный тест с реальным облаком запускается отдельно:
+
+```bash
+YC_RUN_INTEGRATION=1 pytest -m integration
+```
+
+Для него нужно задать:
+
+- `YC_IAM_TOKEN` или другой поддерживаемый способ аутентификации
+- `YC_TEST_FOLDER_ID`
+- `YC_TEST_ZONE_ID`
+- `YC_TEST_SSH_PUBLIC_KEY_PATH`
+
+## Документы
+
+- [Каркас пояснительной записки](docs/explanatory-note-outline.md)
+- [Сценарий демонстрации](docs/demo-scenario.md)
+
+## Актуальные источники
+
+- [Yandex Cloud SDK quickstart, updated March 17, 2026](https://yandex.cloud/en/docs/overview/sdk/quickstart)
+- [Yandex Cloud Python SDK repository](https://github.com/yandex-cloud/python-sdk)
+- [Yandex Cloud VPC NetworkService.Create gRPC reference](https://yandex.cloud/en/docs/vpc/api-ref/grpc/Network/create)
+- [Yandex Cloud VPC SecurityGroupService.Create gRPC reference](https://yandex.cloud/en/docs/vpc/api-ref/grpc/SecurityGroup/create)
+- [Yandex Cloud VPC SubnetService.Create gRPC reference](https://yandex.cloud/en/docs/vpc/api-ref/grpc/Subnet/create)
+- [Yandex Cloud Compute DiskService.Create gRPC reference](https://yandex.cloud/en/docs/compute/api-ref/grpc/Disk/create)
+- [Yandex Cloud Compute InstanceService.Create gRPC reference](https://yandex.cloud/ru/docs/compute/api-ref/grpc/Instance/create)
+- [Yandex Cloud Compute ImageService.GetLatestByFamily gRPC reference](https://yandex.cloud/en/docs/compute/api-ref/grpc/Image/getLatestByFamily)
