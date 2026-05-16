@@ -8,6 +8,7 @@
 - `plan` строит план изменений по локальному `state.json`.
 - `state` показывает текущее локальное состояние, сохраненное в `state.json`.
 - `graph` генерирует граф зависимостей ресурсов в формате Graphviz DOT.
+- `drift-detect` сверяет манифест и `state.json` с реальным состоянием в Yandex Cloud.
 - `apply --confirm` создает или пересоздает инфраструктуру.
 - `destroy --confirm` удаляет инфраструктуру в обратном порядке зависимостей.
 - Поддерживаются ресурсы `network`, `security_group`, `subnet`, `disk`, `instance`.
@@ -79,6 +80,7 @@ iac-tool validate examples/sample-manifest.yaml
 iac-tool plan examples/sample-manifest.yaml
 iac-tool state examples/sample-manifest.yaml
 iac-tool graph examples/sample-manifest.yaml
+iac-tool drift-detect examples/sample-manifest.yaml
 iac-tool apply examples/sample-manifest.yaml --confirm
 iac-tool destroy examples/sample-manifest.yaml --confirm
 ```
@@ -99,6 +101,15 @@ dot -Tpng infrastructure.dot -o infrastructure.png
 ```
 
 Команда `graph` не обращается к облаку и не требует аутентификации, она работает только по локальному манифесту.
+
+Для проверки drift между манифестом, локальным `state.json` и реальным облаком:
+
+```bash
+iac-tool drift-detect examples/sample-manifest.yaml
+iac-tool drift-detect examples/sample-manifest.yaml --json
+```
+
+Команда `drift-detect` требует аутентификации в Yandex Cloud и возвращает код `2`, если обнаружены расхождения.
 
 Для диагностики ошибок доступны подробные логи:
 

@@ -6,6 +6,7 @@ from pathlib import Path
 import typer
 
 from .auth import load_auth_config
+from .drift import DriftReport, DriftDetector
 from .exceptions import IaCToolError
 from .executor import PlanExecutor
 from .facade import YandexCloudFacade
@@ -108,6 +109,26 @@ def _print_state(state: InfrastructureState, state_path: Path) -> None:
         typer.echo(f"    dependencies: {dependencies}")
         if resource.metadata:
             typer.echo(f"    metadata: {json.dumps(resource.metadata, ensure_ascii=True, sort_keys=True)}")
+
+
+def _print_drift_report(report: DriftReport, state_path: Path) -> None:
+    typer.echo(f"State file: {state_path}")
+    typer.echo(f"Resources inspected: {len(report.findings)}")
+    if not report.findings:
+        typer.echo("No managed resources were found in the manifest or state.")
+        return
+
+    typer.echo("Drift summary:")
+    for finding in report.findings:
+        suffix = f" id={finding.resource_id}" if finding.resource_id else ""
+        typer.echo(f"  - {finding.status.value:<17} {finding.resource_type}:{finding.logical_name}{suffix}")
+        for detail in finding.details:
+            typer.echo(f"    detail: {detail}")
+
+    if report.has_drift:
+        typer.echo(f"Resources with drift: {report.drift_count}")
+        return
+    typer.echo("No drift detected.")
 
 
 def _ensure_confirm(confirm: bool, action: str) -> None:
@@ -253,6 +274,70 @@ def graph(
             return
         target = write_dependency_graph(output, content)
         typer.echo(f"Graph written to: {target}")
+    except IaCToolError as exc:
+        _handle_cli_error(exc)
+
+
+@app.command()
+def drift_detect(
+    manifest: Path = typer.Argument(
+        ...,
+        exists=True,
+        dir_okay=False,
+        readable=True,
+        resolve_path=True,
+        help="Path to the infrastructure manifest in YAML format.",
+    ),
+    state_file: Path | None = typer.Option(
+        None,
+        "--state-file",
+        dir_okay=False,
+        resolve_path=True,
+        help="Optional path to state.json. Defaults to manifest directory/state.json.",
+    ),
+    auth_config: Path | None = typer.Option(
+        None,
+        "--auth-config",
+        dir_okay=False,
+        resolve_path=True,
+        help="Optional path to local JSON authentication settings.",
+    ),
+    as_json: bool = typer.Option(
+        False,
+        "--json",
+        help="Print the drift report as JSON.",
+    ),
+) -> None:
+    """Detect drift between manifest/state and the real cloud."""
+    try:
+        logger.info("Detecting drift for manifest %s", manifest)
+        loaded_manifest, store = _load_manifest_and_state(manifest, state_file)
+        detector = DriftDetector.from_manifest(loaded_manifest)
+        report = detector.detect(store.load(), YandexCloudFacade(load_auth_config(auth_config)))
+        logger.info(
+            "Drift detection completed for %s: inspected=%d drifted=%d",
+            manifest,
+            len(report.findings),
+            report.drift_count,
+        )
+        if as_json:
+            typer.echo(
+                json.dumps(
+                    {
+                        "state_file": str(store.path),
+                        "findings": report.model_dump(mode="json")["findings"],
+                        "has_drift": report.has_drift,
+                        "drift_count": report.drift_count,
+                        "in_sync_count": report.in_sync_count,
+                    },
+                    indent=2,
+                    ensure_ascii=True,
+                ),
+            )
+        else:
+            _print_drift_report(report, store.path)
+        if report.has_drift:
+            raise typer.Exit(code=2)
     except IaCToolError as exc:
         _handle_cli_error(exc)
 

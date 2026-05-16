@@ -7,7 +7,7 @@ import time
 from typing import Any
 
 from .auth import AuthConfig
-from .exceptions import CloudProviderError
+from .exceptions import CloudProviderError, ResourceNotFoundError
 from .observability import get_logger
 
 
@@ -95,6 +95,23 @@ class YandexCloudFacade:
             logger.debug("Cloud operation %s is still running", operation_id)
             time.sleep(self.poll_interval_seconds)
 
+    def _is_not_found_error(self, exc: Exception) -> bool:
+        code = getattr(exc, "code", None)
+        if not callable(code):
+            return False
+        try:
+            grpc_status = code()
+        except Exception:
+            return False
+        return str(grpc_status) == "StatusCode.NOT_FOUND"
+
+    def _raise_describe_error(self, resource_type: str, resource_id: str, exc: Exception) -> None:
+        if self._is_not_found_error(exc):
+            raise ResourceNotFoundError(
+                f"{resource_type.capitalize()} '{resource_id}' was not found in Yandex Cloud",
+            ) from exc
+        raise CloudProviderError(f"Failed to describe {resource_type} '{resource_id}': {exc}") from exc
+
     def create_network(self, folder_id: str, name: str, labels: dict[str, str]) -> str:
         from yandex.cloud.vpc.v1.network_service_pb2 import CreateNetworkMetadata, CreateNetworkRequest
         from yandex.cloud.vpc.v1.network_service_pb2_grpc import NetworkServiceStub
@@ -127,6 +144,21 @@ class YandexCloudFacade:
             raise CloudProviderError(f"Failed to submit network deletion request for '{network_id}': {exc}") from exc
         logger.info("Network deletion request accepted for %s, operation_id=%s", network_id, operation.id)
         self._wait_for_operation(operation.id)
+
+    def describe_network(self, network_id: str) -> dict[str, object]:
+        from yandex.cloud.vpc.v1.network_service_pb2 import GetNetworkRequest
+        from yandex.cloud.vpc.v1.network_service_pb2_grpc import NetworkServiceStub
+
+        client = self.sdk.client(NetworkServiceStub)
+        logger.info("Fetching network %s", network_id)
+        try:
+            network = client.Get(GetNetworkRequest(network_id=network_id))
+        except Exception as exc:
+            self._raise_describe_error("network", network_id, exc)
+        return {
+            "name": network.name,
+            "labels": dict(network.labels),
+        }
 
     def create_subnet(
         self,
@@ -172,6 +204,24 @@ class YandexCloudFacade:
         logger.info("Subnet deletion request accepted for %s, operation_id=%s", subnet_id, operation.id)
         self._wait_for_operation(operation.id)
 
+    def describe_subnet(self, subnet_id: str) -> dict[str, object]:
+        from yandex.cloud.vpc.v1.subnet_service_pb2 import GetSubnetRequest
+        from yandex.cloud.vpc.v1.subnet_service_pb2_grpc import SubnetServiceStub
+
+        client = self.sdk.client(SubnetServiceStub)
+        logger.info("Fetching subnet %s", subnet_id)
+        try:
+            subnet = client.Get(GetSubnetRequest(subnet_id=subnet_id))
+        except Exception as exc:
+            self._raise_describe_error("subnet", subnet_id, exc)
+        return {
+            "name": subnet.name,
+            "labels": dict(subnet.labels),
+            "network_id": subnet.network_id,
+            "zone_id": subnet.zone_id,
+            "cidr_blocks": sorted(subnet.v4_cidr_blocks),
+        }
+
     def create_disk(
         self,
         *,
@@ -216,6 +266,25 @@ class YandexCloudFacade:
             raise CloudProviderError(f"Failed to submit disk deletion request for '{disk_id}': {exc}") from exc
         logger.info("Disk deletion request accepted for %s, operation_id=%s", disk_id, operation.id)
         self._wait_for_operation(operation.id)
+
+    def describe_disk(self, disk_id: str) -> dict[str, object]:
+        from yandex.cloud.compute.v1.disk_service_pb2 import GetDiskRequest
+        from yandex.cloud.compute.v1.disk_service_pb2_grpc import DiskServiceStub
+
+        client = self.sdk.client(DiskServiceStub)
+        logger.info("Fetching disk %s", disk_id)
+        try:
+            disk = client.Get(GetDiskRequest(disk_id=disk_id))
+        except Exception as exc:
+            self._raise_describe_error("disk", disk_id, exc)
+        return {
+            "name": disk.name,
+            "labels": dict(disk.labels),
+            "type_id": disk.type_id,
+            "zone_id": disk.zone_id,
+            "size_gb": disk.size // GIBIBYTE,
+            "instance_ids": sorted(disk.instance_ids),
+        }
 
     def _build_security_group_rule_specs(
         self,
@@ -315,6 +384,44 @@ class YandexCloudFacade:
             operation.id,
         )
         self._wait_for_operation(operation.id)
+
+    def describe_security_group(self, security_group_id: str) -> dict[str, object]:
+        from yandex.cloud.vpc.v1.security_group_pb2 import SecurityGroupRule
+        from yandex.cloud.vpc.v1.security_group_service_pb2 import GetSecurityGroupRequest
+        from yandex.cloud.vpc.v1.security_group_service_pb2_grpc import SecurityGroupServiceStub
+
+        direction_values = SecurityGroupRule.DESCRIPTOR.fields_by_name["direction"].enum_type.values_by_number
+        client = self.sdk.client(SecurityGroupServiceStub)
+        logger.info("Fetching security group %s", security_group_id)
+        try:
+            security_group = client.Get(GetSecurityGroupRequest(security_group_id=security_group_id))
+        except Exception as exc:
+            self._raise_describe_error("security group", security_group_id, exc)
+
+        rules: list[dict[str, object]] = []
+        for rule in security_group.rules:
+            direction_name = direction_values[rule.direction].name
+            cidr_blocks = sorted([*rule.cidr_blocks.v4_cidr_blocks, *rule.cidr_blocks.v6_cidr_blocks])
+            from_port = rule.ports.from_port if rule.HasField("ports") else None
+            to_port = rule.ports.to_port if rule.HasField("ports") else None
+            rules.append(
+                {
+                    "direction": direction_name,
+                    "protocol": rule.protocol_name,
+                    "cidr_blocks": cidr_blocks,
+                    "from_port": from_port,
+                    "to_port": to_port,
+                    "description": rule.description or None,
+                },
+            )
+
+        rules.sort(key=lambda item: json.dumps(item, sort_keys=True, ensure_ascii=True))
+        return {
+            "name": security_group.name,
+            "labels": dict(security_group.labels),
+            "network_id": security_group.network_id,
+            "rules": rules,
+        }
 
     def resolve_image_id(self, image_folder_id: str, image_family: str) -> str:
         from yandex.cloud.compute.v1.image_service_pb2 import GetImageLatestByFamilyRequest
@@ -451,3 +558,38 @@ class YandexCloudFacade:
             raise CloudProviderError(f"Failed to submit instance deletion request for '{instance_id}': {exc}") from exc
         logger.info("Instance deletion request accepted for %s, operation_id=%s", instance_id, operation.id)
         self._wait_for_operation(operation.id)
+
+    def describe_instance(self, instance_id: str) -> dict[str, object]:
+        from yandex.cloud.compute.v1.instance_service_pb2 import GetInstanceRequest
+        from yandex.cloud.compute.v1.instance_service_pb2_grpc import InstanceServiceStub
+
+        client = self.sdk.client(InstanceServiceStub)
+        logger.info("Fetching instance %s", instance_id)
+        try:
+            instance = client.Get(GetInstanceRequest(instance_id=instance_id, view=GetInstanceRequest.FULL))
+        except Exception as exc:
+            self._raise_describe_error("instance", instance_id, exc)
+
+        primary_interface = instance.network_interfaces[0] if instance.network_interfaces else None
+        assign_public_ip = False
+        subnet_id = None
+        security_group_ids: list[str] = []
+        if primary_interface is not None:
+            subnet_id = primary_interface.subnet_id or None
+            security_group_ids = sorted(primary_interface.security_group_ids)
+            assign_public_ip = bool(primary_interface.primary_v4_address.one_to_one_nat.address)
+
+        return {
+            "name": instance.name,
+            "labels": dict(instance.labels),
+            "zone_id": instance.zone_id,
+            "platform_id": instance.platform_id,
+            "cores": instance.resources.cores,
+            "memory_gb": instance.resources.memory // GIBIBYTE,
+            "preemptible": instance.scheduling_policy.preemptible,
+            "subnet_id": subnet_id,
+            "security_group_ids": security_group_ids,
+            "assign_public_ip": assign_public_ip,
+            "data_disk_ids": sorted(disk.disk_id for disk in instance.secondary_disks),
+            "service_account_id": instance.service_account_id or None,
+        }

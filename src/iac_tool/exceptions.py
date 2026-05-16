@@ -18,6 +18,9 @@ class CloudProviderError(IaCToolError):
     """Raised when the cloud provider returns an error."""
 
 
+class ResourceNotFoundError(CloudProviderError):
+    """Raised when a managed cloud resource no longer exists."""
+
+
 class AuthenticationError(IaCToolError):
     """Raised when authentication settings are missing or invalid."""
-
