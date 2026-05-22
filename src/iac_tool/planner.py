@@ -3,11 +3,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import StrEnum
 
-from .commands import CreateResourceCommand, DeleteResourceCommand, PlanCommand
+from .commands import CreateResourceCommand, DeleteResourceCommand, DeleteStateResourceCommand, PlanCommand
 from .exceptions import PlanningError
 from .manifest import Manifest
 from .resources import CloudResourceHandler, ResourceHandlerFactory
-from .state import InfrastructureState
+from .state import InfrastructureState, ResourceState
 
 
 class ChangeKind(StrEnum):
@@ -40,7 +40,10 @@ class Planner:
     def __init__(self, handlers: list[CloudResourceHandler]) -> None:
         self.handlers = handlers
         self._index = {handler.logical_name: handler for handler in handlers}
+        if len(self._index) != len(handlers):
+            raise PlanningError("Duplicate logical_name detected in resource handlers")
         self._validate_dependency_graph()
+        self.handlers = self._sort_handlers_topologically(handlers)
 
     @classmethod
     def from_manifest(cls, manifest: Manifest) -> "Planner":
@@ -53,6 +56,30 @@ class Planner:
                     raise PlanningError(
                         f"Resource '{handler.logical_name}' depends on unknown resource '{dependency}'",
                     )
+
+    def _sort_handlers_topologically(self, handlers: list[CloudResourceHandler]) -> list[CloudResourceHandler]:
+        sorted_handlers: list[CloudResourceHandler] = []
+        visiting: set[str] = set()
+        visited: set[str] = set()
+
+        def visit(handler: CloudResourceHandler, path: tuple[str, ...]) -> None:
+            if handler.logical_name in visited:
+                return
+            if handler.logical_name in visiting:
+                cycle = " -> ".join([*path, handler.logical_name])
+                raise PlanningError(f"Resource dependency cycle detected: {cycle}")
+
+            visiting.add(handler.logical_name)
+            for dependency in handler.dependencies:
+                visit(self._index[dependency], (*path, handler.logical_name))
+            visiting.remove(handler.logical_name)
+            visited.add(handler.logical_name)
+            sorted_handlers.append(handler)
+
+        for handler in handlers:
+            visit(handler, ())
+
+        return sorted_handlers
 
     def build_apply_plan(self, state: InfrastructureState) -> ExecutionPlan:
         decisions: dict[str, ChangeKind] = {}
@@ -97,11 +124,38 @@ class Planner:
             )
             for handler in self.handlers
         ]
+        orphaned_resources = [
+            resource
+            for logical_name, resource in state.resources.items()
+            if logical_name not in self._index
+        ]
+        changes.extend(
+            PlannedChange(
+                logical_name=resource.logical_name,
+                resource_type=resource.resource_type,
+                kind=ChangeKind.DELETE,
+                reason="resource is absent from manifest",
+                dependencies=tuple(resource.dependencies),
+            )
+            for resource in orphaned_resources
+        )
 
         commands: list[PlanCommand] = []
-        for handler in reversed(self.handlers):
-            if decisions[handler.logical_name] == ChangeKind.REPLACE:
-                commands.append(DeleteResourceCommand(handler=handler, reason=reasons[handler.logical_name]))
+        replaced_resources = [
+            state.require(handler.logical_name)
+            for handler in self.handlers
+            if decisions[handler.logical_name] == ChangeKind.REPLACE
+        ]
+        for resource in reversed(_sort_state_resources_topologically(replaced_resources)):
+            handler = self._index[resource.logical_name]
+            reason = reasons[resource.logical_name]
+            if resource.resource_type == handler.resource_type:
+                commands.append(DeleteResourceCommand(handler=handler, reason=reason))
+            else:
+                commands.append(DeleteStateResourceCommand(resource=resource, reason=reason))
+
+        for resource in reversed(_sort_state_resources_topologically(orphaned_resources)):
+            commands.append(DeleteStateResourceCommand(resource=resource, reason="resource is absent from manifest"))
 
         for handler in self.handlers:
             kind = decisions[handler.logical_name]
@@ -112,7 +166,6 @@ class Planner:
 
     def build_destroy_plan(self, state: InfrastructureState) -> ExecutionPlan:
         changes: list[PlannedChange] = []
-        commands: list[PlanCommand] = []
 
         for handler in self.handlers:
             current = state.get(handler.logical_name)
@@ -137,9 +190,52 @@ class Planner:
                     ),
                 )
 
-        for handler in reversed(self.handlers):
-            if state.get(handler.logical_name) is not None:
+        for logical_name, resource in sorted(state.resources.items()):
+            if logical_name in self._index:
+                continue
+            changes.append(
+                PlannedChange(
+                    logical_name=logical_name,
+                    resource_type=resource.resource_type,
+                    kind=ChangeKind.DELETE,
+                    reason="resource is present in state but absent from the current manifest",
+                    dependencies=tuple(resource.dependencies),
+                ),
+            )
+
+        commands: list[PlanCommand] = []
+        for resource in reversed(_sort_state_resources_topologically(list(state.resources.values()))):
+            handler = self._index.get(resource.logical_name)
+            if handler is not None and resource.resource_type == handler.resource_type:
                 commands.append(DeleteResourceCommand(handler=handler, reason="resource is present in state"))
+            else:
+                commands.append(DeleteStateResourceCommand(resource=resource, reason="resource is present in state"))
 
         return ExecutionPlan(changes=changes, commands=commands)
 
+
+def _sort_state_resources_topologically(resources: list[ResourceState]) -> list[ResourceState]:
+    index = {resource.logical_name: resource for resource in resources}
+    sorted_resources: list[ResourceState] = []
+    visiting: set[str] = set()
+    visited: set[str] = set()
+
+    def visit(resource: ResourceState, path: tuple[str, ...]) -> None:
+        if resource.logical_name in visited:
+            return
+        if resource.logical_name in visiting:
+            cycle = " -> ".join([*path, resource.logical_name])
+            raise PlanningError(f"State dependency cycle detected: {cycle}")
+
+        visiting.add(resource.logical_name)
+        for dependency in resource.dependencies:
+            if dependency in index:
+                visit(index[dependency], (*path, resource.logical_name))
+        visiting.remove(resource.logical_name)
+        visited.add(resource.logical_name)
+        sorted_resources.append(resource)
+
+    for resource in resources:
+        visit(resource, ())
+
+    return sorted_resources

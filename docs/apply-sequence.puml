@@ -1,0 +1,28 @@
+@startuml
+title IaC Tool - apply sequence
+
+actor User
+participant "CLI" as CLI
+participant "Manifest Loader" as ManifestLoader
+participant "Planner" as Planner
+participant "Plan Executor" as Executor
+participant "Yandex Cloud Facade" as Facade
+database "state.json" as State
+
+User -> CLI : iac-tool apply manifest.yaml --confirm
+CLI -> ManifestLoader : load and validate manifest
+ManifestLoader --> CLI : Manifest
+CLI -> State : load state
+CLI -> Planner : build_apply_plan(manifest, state)
+Planner --> CLI : ExecutionPlan
+CLI -> Executor : execute(plan)
+
+loop for each command
+  Executor -> Facade : create/delete cloud resource
+  Facade --> Executor : resource id or completion
+  Executor -> State : atomically save updated state
+end
+
+Executor --> CLI : executed commands
+CLI --> User : plan result and live outputs
+@enduml

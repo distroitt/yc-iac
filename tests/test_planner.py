@@ -170,6 +170,64 @@ def test_plan_replaces_only_affected_dependency_branch(tmp_path: Path) -> None:
     assert len(plan.commands) == 6
 
 
+def test_plan_deletes_resources_removed_from_manifest(tmp_path: Path) -> None:
+    manifest_path = _manifest_file(tmp_path)
+    state = _matching_state(manifest_path)
+    state.put(
+        ResourceState(
+            logical_name="old-disk",
+            resource_type="disk",
+            resource_id="disk-id",
+            config_hash="old-hash",
+            dependencies=[],
+        ),
+    )
+
+    manifest = load_manifest(manifest_path)
+    planner = Planner.from_manifest(manifest)
+    plan = planner.build_apply_plan(state)
+
+    assert {change.logical_name: change.kind for change in plan.changes}["old-disk"] == ChangeKind.DELETE
+    assert [command.description() for command in plan.commands] == ["delete disk:old-disk"]
+
+
+def test_plan_deletes_old_state_type_when_logical_resource_type_changes(tmp_path: Path) -> None:
+    manifest_path = _manifest_file(tmp_path)
+    state = _matching_state(manifest_path)
+    state.put(
+        ResourceState(
+            logical_name="network",
+            resource_type="subnet",
+            resource_id="old-subnet-id",
+            config_hash="old-hash",
+            dependencies=[],
+        ),
+    )
+
+    manifest = load_manifest(manifest_path)
+    planner = Planner.from_manifest(manifest)
+    plan = planner.build_apply_plan(state)
+    descriptions = [command.description() for command in plan.commands]
+
+    assert "delete subnet:network" in descriptions
+    assert descriptions.index("delete subnet:network") < descriptions.index("create network:network")
+
+
+def test_planner_topologically_sorts_scrambled_handlers(tmp_path: Path) -> None:
+    manifest_path = _manifest_file(tmp_path)
+    manifest = load_manifest(manifest_path)
+    handlers = list(reversed(ResourceHandlerFactory.build(manifest)))
+
+    planner = Planner(handlers)
+    plan = planner.build_apply_plan(InfrastructureState())
+
+    assert [command.description() for command in plan.commands] == [
+        "create network:network",
+        "create subnet:subnet",
+        "create instance:instance",
+    ]
+
+
 def test_plan_handles_security_groups_and_disks(tmp_path: Path) -> None:
     ssh_key = tmp_path / "id_ed25519.pub"
     ssh_key.write_text("ssh-ed25519 AAAATESTKEY test@example\n", encoding="utf-8")
@@ -235,3 +293,24 @@ instances:
         "instance": ChangeKind.CREATE,
     }
     assert len(plan.commands) == 5
+
+
+def test_destroy_plan_deletes_orphaned_state_resources(tmp_path: Path) -> None:
+    manifest_path = _manifest_file(tmp_path)
+    state = _matching_state(manifest_path)
+    state.put(
+        ResourceState(
+            logical_name="old-disk",
+            resource_type="disk",
+            resource_id="disk-id",
+            config_hash="old-hash",
+            dependencies=[],
+        ),
+    )
+
+    manifest = load_manifest(manifest_path)
+    planner = Planner.from_manifest(manifest)
+    plan = planner.build_destroy_plan(state)
+
+    assert {change.logical_name: change.kind for change in plan.changes}["old-disk"] == ChangeKind.DELETE
+    assert "delete disk:old-disk" in [command.description() for command in plan.commands]

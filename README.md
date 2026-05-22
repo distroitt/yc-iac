@@ -10,8 +10,8 @@
 - `graph` генерирует граф зависимостей ресурсов в формате Graphviz DOT.
 - `drift-detect` сверяет манифест и `state.json` с реальным состоянием в Yandex Cloud.
 - `outputs` показывает стандартные live-outputs по управляемым ресурсам.
-- `apply --confirm` создает или пересоздает инфраструктуру.
-- `destroy --confirm` удаляет инфраструктуру в обратном порядке зависимостей.
+- `apply --confirm` создает, пересоздает и удаляет ресурсы, которые были исключены из манифеста.
+- `destroy --confirm` удаляет всю инфраструктуру из `state.json` в обратном порядке зависимостей.
 - Поддерживаются ресурсы `network`, `security_group`, `subnet`, `disk`, `instance`.
 
 ## Архитектура
@@ -24,8 +24,10 @@
 
 - `Facade`: класс `YandexCloudFacade` скрывает детали SDK и gRPC-вызовов.
 - `Factory`: `ResourceHandlerFactory` создает обработчики ресурсов из манифеста.
-- `Command`: операции плана представлены командами `CreateResourceCommand` и `DeleteResourceCommand`.
-- `Template Method`: базовый класс `CloudResourceHandler` задает общий контракт для жизненного цикла ресурсов.
+- `Command`: операции плана представлены командами `CreateResourceCommand`, `DeleteResourceCommand` и `DeleteStateResourceCommand`.
+- Полиморфизм и абстрактный базовый класс: `CloudResourceHandler` задает общий контракт для разных типов ресурсов.
+
+Планировщик строит порядок операций по графу зависимостей, поэтому ресурсы создаются после своих зависимостей, а удаляются в обратном порядке. Если ресурс присутствует в `state.json`, но отсутствует в текущем манифесте, он попадает в план как `delete`.
 
 ## Структура проекта
 
@@ -155,6 +157,9 @@ YC_RUN_INTEGRATION=1 pytest -m integration
 
 - [Каркас пояснительной записки](docs/explanatory-note-outline.md)
 - [Сценарий демонстрации](docs/demo-scenario.md)
+- [UML class diagram](docs/uml-diagrams.puml)
+- [UML component diagram](docs/component-diagram.puml)
+- [UML apply sequence](docs/apply-sequence.puml)
 
 ## Актуальные источники
 

@@ -3,9 +3,9 @@ from __future__ import annotations
 from pathlib import Path
 import json
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from .exceptions import PlanningError
+from .exceptions import PlanningError, StateError
 
 
 class ResourceState(BaseModel):
@@ -53,13 +53,24 @@ class StateStore:
     def load(self) -> InfrastructureState:
         if not self.path.exists():
             return InfrastructureState()
-        content = json.loads(self.path.read_text(encoding="utf-8"))
-        return InfrastructureState.model_validate(content)
+        try:
+            content = json.loads(self.path.read_text(encoding="utf-8"))
+            return InfrastructureState.model_validate(content)
+        except OSError as exc:
+            raise StateError(f"Unable to read state file: {self.path}") from exc
+        except json.JSONDecodeError as exc:
+            raise StateError(f"State file contains invalid JSON: {self.path}") from exc
+        except ValidationError as exc:
+            raise StateError(f"State file has an invalid shape: {self.path}") from exc
 
     def save(self, state: InfrastructureState) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.path.write_text(
-            json.dumps(state.model_dump(mode="json"), indent=2, ensure_ascii=True) + "\n",
-            encoding="utf-8",
-        )
-
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            temporary_path = self.path.with_name(f".{self.path.name}.tmp")
+            temporary_path.write_text(
+                json.dumps(state.model_dump(mode="json"), indent=2, ensure_ascii=True) + "\n",
+                encoding="utf-8",
+            )
+            temporary_path.replace(self.path)
+        except OSError as exc:
+            raise StateError(f"Unable to write state file: {self.path}") from exc

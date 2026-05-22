@@ -21,24 +21,36 @@ iac-tool validate examples/sample-manifest.yaml
 iac-tool plan examples/sample-manifest.yaml
 ```
 
-4. Применить инфраструктуру:
+4. Показать граф зависимостей:
+
+```bash
+iac-tool graph examples/sample-manifest.yaml
+```
+
+5. Применить инфраструктуру:
 
 ```bash
 iac-tool apply examples/sample-manifest.yaml --confirm
 ```
 
-5. Показать live-outputs:
+6. Показать live-outputs:
 
 ```bash
 iac-tool outputs examples/sample-manifest.yaml
 ```
 
-6. Показать созданные ресурсы в Yandex Cloud.
-7. Повторно запустить `plan` и показать отсутствие изменений.
-8. Удалить инфраструктуру:
+7. Показать созданные ресурсы в Yandex Cloud.
+8. Повторно запустить `plan` и показать отсутствие изменений.
+9. Запустить проверку drift:
+
+```bash
+iac-tool drift-detect examples/sample-manifest.yaml
+```
+
+10. Удалить инфраструктуру:
 
 ```bash
 iac-tool destroy examples/sample-manifest.yaml --confirm
 ```
 
-9. Показать, что `state.json` очищен.
+11. Показать, что `state.json` очищен.

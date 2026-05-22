@@ -1,0 +1,60 @@
+@startuml
+title IaC Tool - class diagram
+
+abstract class CloudResourceHandler {
+  +resource_type : str
+  +logical_name : str
+  +dependencies : tuple
+  +fingerprint_payload()
+  +config_hash()
+  +create(facade, state)
+  +delete(facade, resource)
+}
+
+class NetworkResourceHandler
+class SecurityGroupResourceHandler
+class SubnetResourceHandler
+class DiskResourceHandler
+class InstanceResourceHandler
+class ResourceHandlerFactory {
+  +build(manifest)
+}
+
+CloudResourceHandler <|-- NetworkResourceHandler
+CloudResourceHandler <|-- SecurityGroupResourceHandler
+CloudResourceHandler <|-- SubnetResourceHandler
+CloudResourceHandler <|-- DiskResourceHandler
+CloudResourceHandler <|-- InstanceResourceHandler
+ResourceHandlerFactory ..> CloudResourceHandler : creates
+
+interface PlanCommand {
+  +description()
+  +execute(facade, state, state_store)
+}
+
+class CreateResourceCommand
+class DeleteResourceCommand
+class DeleteStateResourceCommand
+class Planner {
+  +from_manifest(manifest)
+  +build_apply_plan(state)
+  +build_destroy_plan(state)
+}
+class PlanExecutor {
+  +execute(plan)
+}
+class YandexCloudFacade
+class StateStore {
+  +load()
+  +save(state)
+}
+
+PlanCommand <|.. CreateResourceCommand
+PlanCommand <|.. DeleteResourceCommand
+PlanCommand <|.. DeleteStateResourceCommand
+Planner ..> PlanCommand : builds
+PlanExecutor ..> PlanCommand : executes
+PlanExecutor ..> YandexCloudFacade
+PlanExecutor ..> StateStore
+CloudResourceHandler ..> YandexCloudFacade
+@enduml

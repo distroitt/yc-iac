@@ -14,6 +14,10 @@ class ExecutionError(IaCToolError):
     """Raised when a plan command fails."""
 
 
+class StateError(IaCToolError):
+    """Raised when the local state file cannot be read or written."""
+
+
 class CloudProviderError(IaCToolError):
     """Raised when the cloud provider returns an error."""
 

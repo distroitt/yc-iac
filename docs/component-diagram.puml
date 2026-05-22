@@ -1,0 +1,30 @@
+@startuml
+title IaC Tool - component diagram
+
+component "CLI" as CLI
+component "Manifest Loader" as ManifestLoader
+component "Planner" as Planner
+component "Plan Commands" as PlanCommands
+component "Executor" as Executor
+component "Yandex Cloud Facade" as Facade
+component "Yandex Cloud SDK" as SDK
+component "State Store" as StateStore
+component "Graph Renderer" as GraphRenderer
+component "Drift Detector" as DriftDetector
+component "Outputs Collector" as OutputsCollector
+database "state.json" as StateFile
+
+CLI --> ManifestLoader
+ManifestLoader --> Planner
+Planner --> PlanCommands
+PlanCommands --> Executor
+Executor --> Facade
+Executor --> StateStore
+Facade --> SDK
+StateStore --> StateFile
+GraphRenderer --> ManifestLoader
+DriftDetector --> StateStore
+DriftDetector --> Facade
+OutputsCollector --> StateStore
+OutputsCollector --> Facade
+@enduml
