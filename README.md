@@ -9,6 +9,7 @@
 - `state` показывает текущее локальное состояние, сохраненное в `state.json`.
 - `graph` генерирует граф зависимостей ресурсов в формате Graphviz DOT.
 - `drift-detect` сверяет манифест и `state.json` с реальным состоянием в Yandex Cloud.
+- `outputs` показывает стандартные live-outputs по управляемым ресурсам.
 - `apply --confirm` создает или пересоздает инфраструктуру.
 - `destroy --confirm` удаляет инфраструктуру в обратном порядке зависимостей.
 - Поддерживаются ресурсы `network`, `security_group`, `subnet`, `disk`, `instance`.
@@ -81,6 +82,7 @@ iac-tool plan examples/sample-manifest.yaml
 iac-tool state examples/sample-manifest.yaml
 iac-tool graph examples/sample-manifest.yaml
 iac-tool drift-detect examples/sample-manifest.yaml
+iac-tool outputs examples/sample-manifest.yaml
 iac-tool apply examples/sample-manifest.yaml --confirm
 iac-tool destroy examples/sample-manifest.yaml --confirm
 ```
@@ -110,6 +112,16 @@ iac-tool drift-detect examples/sample-manifest.yaml --json
 ```
 
 Команда `drift-detect` требует аутентификации в Yandex Cloud и возвращает код `2`, если обнаружены расхождения.
+
+Для получения стандартных live-outputs из облака:
+
+```bash
+iac-tool outputs examples/sample-manifest.yaml
+iac-tool outputs examples/sample-manifest.yaml --json
+```
+
+Команда `outputs` читает ресурсы по `resource_id` из `state.json` и обращается к Yandex Cloud за актуальными значениями, например `public_ip`, `fqdn`, `subnet_id` и `attached_instance_ids`.
+После успешного `apply` этот же стандартный набор live-outputs печатается автоматически.
 
 Для диагностики ошибок доступны подробные логи:
 

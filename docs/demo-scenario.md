@@ -27,13 +27,18 @@ iac-tool plan examples/sample-manifest.yaml
 iac-tool apply examples/sample-manifest.yaml --confirm
 ```
 
-5. Показать созданные ресурсы в Yandex Cloud.
-6. Повторно запустить `plan` и показать отсутствие изменений.
-7. Удалить инфраструктуру:
+5. Показать live-outputs:
+
+```bash
+iac-tool outputs examples/sample-manifest.yaml
+```
+
+6. Показать созданные ресурсы в Yandex Cloud.
+7. Повторно запустить `plan` и показать отсутствие изменений.
+8. Удалить инфраструктуру:
 
 ```bash
 iac-tool destroy examples/sample-manifest.yaml --confirm
 ```
 
-8. Показать, что `state.json` очищен.
-
+9. Показать, что `state.json` очищен.

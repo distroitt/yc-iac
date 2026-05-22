@@ -560,6 +560,7 @@ class YandexCloudFacade:
         self._wait_for_operation(operation.id)
 
     def describe_instance(self, instance_id: str) -> dict[str, object]:
+        from yandex.cloud.compute.v1.instance_pb2 import Instance
         from yandex.cloud.compute.v1.instance_service_pb2 import GetInstanceRequest
         from yandex.cloud.compute.v1.instance_service_pb2_grpc import InstanceServiceStub
 
@@ -571,24 +572,33 @@ class YandexCloudFacade:
         except Exception as exc:
             self._raise_describe_error("instance", instance_id, exc)
 
+        status_values = Instance.DESCRIPTOR.fields_by_name["status"].enum_type.values_by_number
         primary_interface = instance.network_interfaces[0] if instance.network_interfaces else None
         assign_public_ip = False
         subnet_id = None
+        internal_ip = None
+        public_ip = None
         security_group_ids: list[str] = []
         if primary_interface is not None:
             subnet_id = primary_interface.subnet_id or None
             security_group_ids = sorted(primary_interface.security_group_ids)
-            assign_public_ip = bool(primary_interface.primary_v4_address.one_to_one_nat.address)
+            internal_ip = primary_interface.primary_v4_address.address or None
+            public_ip = primary_interface.primary_v4_address.one_to_one_nat.address or None
+            assign_public_ip = bool(public_ip)
 
         return {
             "name": instance.name,
             "labels": dict(instance.labels),
+            "status": status_values[instance.status].name,
+            "fqdn": instance.fqdn or None,
             "zone_id": instance.zone_id,
             "platform_id": instance.platform_id,
             "cores": instance.resources.cores,
             "memory_gb": instance.resources.memory // GIBIBYTE,
             "preemptible": instance.scheduling_policy.preemptible,
             "subnet_id": subnet_id,
+            "internal_ip": internal_ip,
+            "public_ip": public_ip,
             "security_group_ids": security_group_ids,
             "assign_public_ip": assign_public_ip,
             "data_disk_ids": sorted(disk.disk_id for disk in instance.secondary_disks),

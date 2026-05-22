@@ -13,6 +13,7 @@ from .facade import YandexCloudFacade
 from .graphing import render_dependency_graph, write_dependency_graph
 from .manifest import Manifest, load_manifest
 from .observability import configure_logging, format_exception_chain, get_logger
+from .outputs import OutputsCollector, OutputsReport
 from .planner import ChangeKind, ExecutionPlan, Planner
 from .state import InfrastructureState, StateStore
 
@@ -129,6 +130,51 @@ def _print_drift_report(report: DriftReport, state_path: Path) -> None:
         typer.echo(f"Resources with drift: {report.drift_count}")
         return
     typer.echo("No drift detected.")
+
+
+def _print_outputs_report(report: OutputsReport, state_path: Path) -> None:
+    typer.echo(f"State file: {state_path}")
+    typer.echo(f"Resources reported: {len(report.resources)}")
+    if not report.resources:
+        typer.echo("No managed resources were found in the manifest.")
+        return
+
+    typer.echo("Outputs:")
+    for resource in report.resources:
+        suffix = f" id={resource.resource_id}" if resource.resource_id else ""
+        typer.echo(f"  - {resource.status.value:<16} {resource.resource_type}:{resource.logical_name}{suffix}")
+        for key, value in resource.outputs.items():
+            typer.echo(f"    {key}: {json.dumps(value, ensure_ascii=True, sort_keys=True)}")
+        for detail in resource.details:
+            typer.echo(f"    detail: {detail}")
+
+    if report.warnings:
+        typer.echo("Warnings:")
+        for warning in report.warnings:
+            typer.echo(f"  - {warning}")
+
+
+def _print_outputs_after_apply(
+    manifest: Manifest,
+    store: StateStore,
+    facade: YandexCloudFacade,
+) -> None:
+    try:
+        report = OutputsCollector.from_manifest(manifest).collect(
+            store.load(),
+            facade,
+            continue_on_error=True,
+        )
+    except IaCToolError as exc:
+        typer.secho(
+            f"Warning: unable to collect live outputs after apply: {format_exception_chain(exc)}",
+            fg=typer.colors.YELLOW,
+            err=True,
+        )
+        return
+
+    typer.echo("Live outputs:")
+    _print_outputs_report(report, store.path)
 
 
 def _ensure_confirm(confirm: bool, action: str) -> None:
@@ -343,6 +389,64 @@ def drift_detect(
 
 
 @app.command()
+def outputs(
+    manifest: Path = typer.Argument(
+        ...,
+        exists=True,
+        dir_okay=False,
+        readable=True,
+        resolve_path=True,
+        help="Path to the infrastructure manifest in YAML format.",
+    ),
+    state_file: Path | None = typer.Option(
+        None,
+        "--state-file",
+        dir_okay=False,
+        resolve_path=True,
+        help="Optional path to state.json. Defaults to manifest directory/state.json.",
+    ),
+    auth_config: Path | None = typer.Option(
+        None,
+        "--auth-config",
+        dir_okay=False,
+        resolve_path=True,
+        help="Optional path to local JSON authentication settings.",
+    ),
+    as_json: bool = typer.Option(
+        False,
+        "--json",
+        help="Print outputs as JSON.",
+    ),
+) -> None:
+    """Show standard live outputs for managed resources."""
+    try:
+        logger.info("Collecting live outputs for manifest %s", manifest)
+        loaded_manifest, store = _load_manifest_and_state(manifest, state_file)
+        report = OutputsCollector.from_manifest(loaded_manifest).collect(
+            store.load(),
+            YandexCloudFacade(load_auth_config(auth_config)),
+        )
+        logger.info("Collected outputs for %s: resources=%d", manifest, len(report.resources))
+        if as_json:
+            typer.echo(
+                json.dumps(
+                    {
+                        "state_file": str(store.path),
+                        "resources": report.model_dump(mode="json")["resources"],
+                        "warnings": report.warnings,
+                        "available_count": report.available_count,
+                    },
+                    indent=2,
+                    ensure_ascii=True,
+                ),
+            )
+            return
+        _print_outputs_report(report, store.path)
+    except IaCToolError as exc:
+        _handle_cli_error(exc)
+
+
+@app.command()
 def apply(
     manifest: Path = typer.Argument(
         ...,
@@ -392,6 +496,7 @@ def apply(
         typer.echo("Apply completed.")
         for item in executed:
             typer.echo(f"  - {item}")
+        _print_outputs_after_apply(loaded_manifest, store, facade)
     except typer.BadParameter as exc:
         typer.secho(str(exc), fg=typer.colors.RED, err=True)
         raise typer.Exit(code=2) from exc
