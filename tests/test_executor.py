@@ -9,6 +9,7 @@ from iac_tool.state import ResourceState, StateStore
 class FakeFacade:
     def __init__(self) -> None:
         self.calls: list[str] = []
+        self.instance_status = "RUNNING"
 
     def create_network(self, folder_id: str, name: str, labels: dict[str, str]) -> str:
         self.calls.append("create_network")
@@ -58,6 +59,17 @@ class FakeFacade:
     def update_instance(self, **kwargs: object) -> None:
         self.calls.append(f"update_instance:{kwargs['instance_id']}:{','.join(kwargs['update_mask_paths'])}")
 
+    def stop_instance_if_running(self, instance_id: str) -> bool:
+        self.calls.append(f"stop_instance_if_running:{instance_id}:{self.instance_status}")
+        if self.instance_status == "RUNNING":
+            self.instance_status = "STOPPED"
+            return True
+        return False
+
+    def start_instance(self, instance_id: str) -> None:
+        self.calls.append(f"start_instance:{instance_id}")
+        self.instance_status = "RUNNING"
+
     def delete_disk(self, disk_id: str) -> None:
         self.calls.append("delete_disk")
 
@@ -95,6 +107,7 @@ instance:
   subnet: "subnet"
   username: "yc-user"
   ssh_public_key_path: "{ssh_key}"
+  memory_gb: 2
 """.strip()
         + "\n",
         encoding="utf-8",
@@ -281,3 +294,55 @@ def test_executor_updates_network_in_place_and_refreshes_state_payload(tmp_path:
     assert facade.calls == ["update_network:net-1:name"]
     updated_network = store.load().require("network")
     assert updated_network.config_payload["name"] == "renamed-network"
+
+
+def test_executor_stops_running_instance_before_resource_update(tmp_path: Path) -> None:
+    manifest_path = _manifest_file(tmp_path)
+    manifest = load_manifest(manifest_path)
+    planner = Planner.from_manifest(manifest)
+    store = StateStore.for_manifest(manifest_path)
+    facade = FakeFacade()
+    executor = PlanExecutor(facade, store)
+
+    executor.execute(planner.build_apply_plan(store.load()))
+    manifest_path.write_text(
+        manifest_path.read_text(encoding="utf-8").replace("memory_gb: 2", "memory_gb: 4"),
+        encoding="utf-8",
+    )
+    planner = Planner.from_manifest(load_manifest(manifest_path))
+    facade.calls.clear()
+
+    executor.execute(planner.build_apply_plan(store.load()))
+
+    assert facade.calls == [
+        "stop_instance_if_running:instance-1:RUNNING",
+        "update_instance:instance-1:resources_spec",
+        "start_instance:instance-1",
+    ]
+    assert facade.instance_status == "RUNNING"
+
+
+def test_executor_does_not_start_instance_that_was_already_stopped(tmp_path: Path) -> None:
+    manifest_path = _manifest_file(tmp_path)
+    manifest = load_manifest(manifest_path)
+    planner = Planner.from_manifest(manifest)
+    store = StateStore.for_manifest(manifest_path)
+    facade = FakeFacade()
+    executor = PlanExecutor(facade, store)
+
+    executor.execute(planner.build_apply_plan(store.load()))
+    facade.instance_status = "STOPPED"
+    manifest_path.write_text(
+        manifest_path.read_text(encoding="utf-8").replace("memory_gb: 2", "memory_gb: 4"),
+        encoding="utf-8",
+    )
+    planner = Planner.from_manifest(load_manifest(manifest_path))
+    facade.calls.clear()
+
+    executor.execute(planner.build_apply_plan(store.load()))
+
+    assert facade.calls == [
+        "stop_instance_if_running:instance-1:STOPPED",
+        "update_instance:instance-1:resources_spec",
+    ]
+    assert facade.instance_status == "STOPPED"

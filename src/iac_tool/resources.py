@@ -425,6 +425,9 @@ class InstanceResourceHandler(CloudResourceHandler):
         changed = self.changed_fields(resource)
         instance_fields = changed - {"security_groups"}
         if instance_fields:
+            restart_after_update = False
+            if {"cores", "memory_gb"} & instance_fields:
+                restart_after_update = facade.stop_instance_if_running(resource.resource_id)
             mask_paths = []
             for field in sorted(instance_fields):
                 if field in {"cores", "memory_gb"}:
@@ -433,15 +436,19 @@ class InstanceResourceHandler(CloudResourceHandler):
                     mask_paths.append("scheduling_policy")
                 else:
                     mask_paths.append(field)
-            facade.update_instance(
-                instance_id=resource.resource_id,
-                name=self.config.name,
-                labels=self.config.labels,
-                cores=self.config.cores,
-                memory_gb=self.config.memory_gb,
-                preemptible=self.config.preemptible,
-                update_mask_paths=sorted(set(mask_paths)),
-            )
+            try:
+                facade.update_instance(
+                    instance_id=resource.resource_id,
+                    name=self.config.name,
+                    labels=self.config.labels,
+                    cores=self.config.cores,
+                    memory_gb=self.config.memory_gb,
+                    preemptible=self.config.preemptible,
+                    update_mask_paths=sorted(set(mask_paths)),
+                )
+            finally:
+                if restart_after_update:
+                    facade.start_instance(resource.resource_id)
         if "security_groups" in changed or not resource.config_payload:
             facade.update_instance_security_groups(
                 instance_id=resource.resource_id,

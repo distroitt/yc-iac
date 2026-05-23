@@ -761,6 +761,42 @@ class YandexCloudFacade:
         )
         self._wait_for_operation(operation.id, UpdateInstanceNetworkInterfaceMetadata)
 
+    def stop_instance_if_running(self, instance_id: str) -> bool:
+        status = self.describe_instance(instance_id).get("status")
+        if status == "STOPPED":
+            logger.info("Instance %s is already stopped", instance_id)
+            return False
+        if status != "RUNNING":
+            raise CloudProviderError(
+                f"Instance '{instance_id}' must be RUNNING or STOPPED before resource update, current status is {status}",
+            )
+
+        from yandex.cloud.compute.v1.instance_service_pb2 import StopInstanceMetadata, StopInstanceRequest
+        from yandex.cloud.compute.v1.instance_service_pb2_grpc import InstanceServiceStub
+
+        client = self.sdk.client(InstanceServiceStub)
+        logger.info("Submitting instance stop request for %s before resource update", instance_id)
+        try:
+            operation = client.Stop(StopInstanceRequest(instance_id=instance_id))
+        except Exception as exc:
+            raise CloudProviderError(f"Failed to submit instance stop request for '{instance_id}': {exc}") from exc
+        logger.info("Instance stop request accepted for %s, operation_id=%s", instance_id, operation.id)
+        self._wait_for_operation(operation.id, StopInstanceMetadata)
+        return True
+
+    def start_instance(self, instance_id: str) -> None:
+        from yandex.cloud.compute.v1.instance_service_pb2 import StartInstanceMetadata, StartInstanceRequest
+        from yandex.cloud.compute.v1.instance_service_pb2_grpc import InstanceServiceStub
+
+        client = self.sdk.client(InstanceServiceStub)
+        logger.info("Submitting instance start request for %s after resource update", instance_id)
+        try:
+            operation = client.Start(StartInstanceRequest(instance_id=instance_id))
+        except Exception as exc:
+            raise CloudProviderError(f"Failed to submit instance start request for '{instance_id}': {exc}") from exc
+        logger.info("Instance start request accepted for %s, operation_id=%s", instance_id, operation.id)
+        self._wait_for_operation(operation.id, StartInstanceMetadata)
+
     def update_instance(
         self,
         *,

@@ -8,6 +8,8 @@ from yandex.cloud.compute.v1.instance_service_pb2 import (
     OneToOneNatSpec,
     PrimaryAddressSpec,
     ResourcesSpec,
+    StartInstanceRequest,
+    StopInstanceRequest,
     UpdateInstanceRequest,
     UpdateInstanceNetworkInterfaceRequest,
 )
@@ -128,6 +130,14 @@ def test_update_resource_requests_support_mutable_fields() -> None:
     assert disk_request.size == 12 * 1024 ** 3
     assert instance_request.resources_spec.cores == 4
     assert instance_request.scheduling_policy.preemptible is True
+
+
+def test_instance_start_stop_requests_are_compatible() -> None:
+    stop_request = StopInstanceRequest(instance_id="instance-id")
+    start_request = StartInstanceRequest(instance_id="instance-id")
+
+    assert stop_request.instance_id == "instance-id"
+    assert start_request.instance_id == "instance-id"
 
 
 def test_cloud_init_user_data_creates_requested_ssh_user() -> None:
