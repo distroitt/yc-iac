@@ -11,6 +11,9 @@ from yandex.cloud.compute.v1.instance_service_pb2 import (
 )
 from yandex.cloud.vpc.v1.security_group_pb2 import CidrBlocks, PortRange
 from yandex.cloud.vpc.v1.security_group_service_pb2 import CreateSecurityGroupRequest, SecurityGroupRuleSpec
+import yaml
+
+from iac_tool.facade import _build_cloud_init_user_data
 
 
 def test_instance_request_sdk_shapes_are_compatible() -> None:
@@ -71,6 +74,34 @@ def test_get_instance_request_full_view_is_resolved_via_descriptor() -> None:
     request = GetInstanceRequest(instance_id="instance-id", view=full_view)
 
     assert request.view == full_view
+
+
+def test_cloud_init_user_data_creates_requested_ssh_user() -> None:
+    user_data = _build_cloud_init_user_data("yc-user", "ssh-ed25519 AAAATESTKEY test@example")
+    payload = yaml.safe_load(user_data.removeprefix("#cloud-config\n"))
+
+    assert payload["datasource"]["Ec2"]["strict_id"] is False
+    assert payload["ssh_pwauth"] is False
+    assert payload["users"][0]["name"] == "yc-user"
+    assert payload["users"][0]["groups"] == "sudo"
+    assert payload["users"][0]["shell"] == "/bin/bash"
+    assert payload["users"][0]["ssh_authorized_keys"] == ["ssh-ed25519 AAAATESTKEY test@example"]
+
+
+def test_instance_request_accepts_cloud_init_user_data_metadata() -> None:
+    user_data = _build_cloud_init_user_data("yc-user", "ssh-ed25519 AAAATESTKEY test@example")
+    request = CreateInstanceRequest(
+        folder_id="folder-id",
+        zone_id="ru-central1-a",
+        name="demo-instance",
+        platform_id="standard-v3",
+        resources_spec=ResourcesSpec(cores=2, memory=2 * 1024 ** 3, core_fraction=100),
+        metadata={"user-data": user_data},
+    )
+
+    assert "yc-user" in request.metadata["user-data"]
+    assert "ssh_authorized_keys" in request.metadata["user-data"]
+    assert "ssh-keys" not in request.metadata
 
 
 def test_disk_request_sdk_shapes_are_compatible() -> None:

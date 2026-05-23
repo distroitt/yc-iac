@@ -50,8 +50,8 @@ instances:
     name: "oop-course-vm"
     subnet: "subnet"
     platform_id: "standard-v3"
-    cores: 2
-    memory_gb: 2
+    cores: 4
+    memory_gb: 4
     boot_disk_gb: 10
     disk_type: "network-hdd"
     image_family: "ubuntu-2204-lts"

@@ -6,6 +6,8 @@ import json
 import time
 from typing import Any
 
+import yaml
+
 from .auth import AuthConfig
 from .exceptions import CloudProviderError, ResourceNotFoundError
 from .observability import get_logger
@@ -13,6 +15,27 @@ from .observability import get_logger
 
 GIBIBYTE = 1024 ** 3
 logger = get_logger("facade")
+
+
+def _build_cloud_init_user_data(username: str, ssh_public_key: str) -> str:
+    payload = {
+        "datasource": {
+            "Ec2": {
+                "strict_id": False,
+            },
+        },
+        "ssh_pwauth": False,
+        "users": [
+            {
+                "name": username,
+                "groups": "sudo",
+                "shell": "/bin/bash",
+                "sudo": "ALL=(ALL) NOPASSWD:ALL",
+                "ssh_authorized_keys": [ssh_public_key],
+            },
+        ],
+    }
+    return "#cloud-config\n" + yaml.safe_dump(payload, sort_keys=False)
 
 
 class YandexCloudFacade:
@@ -112,6 +135,16 @@ class YandexCloudFacade:
             ) from exc
         raise CloudProviderError(f"Failed to describe {resource_type} '{resource_id}': {exc}") from exc
 
+    def _delete_missing_is_success(self, resource_type: str, resource_id: str, exc: Exception) -> bool:
+        if not self._is_not_found_error(exc):
+            return False
+        logger.warning(
+            "%s %s was already absent in Yandex Cloud; treating delete as successful",
+            resource_type.capitalize(),
+            resource_id,
+        )
+        return True
+
     def create_network(self, folder_id: str, name: str, labels: dict[str, str]) -> str:
         from yandex.cloud.vpc.v1.network_service_pb2 import CreateNetworkMetadata, CreateNetworkRequest
         from yandex.cloud.vpc.v1.network_service_pb2_grpc import NetworkServiceStub
@@ -141,6 +174,8 @@ class YandexCloudFacade:
         try:
             operation = client.Delete(DeleteNetworkRequest(network_id=network_id))
         except Exception as exc:
+            if self._delete_missing_is_success("network", network_id, exc):
+                return
             raise CloudProviderError(f"Failed to submit network deletion request for '{network_id}': {exc}") from exc
         logger.info("Network deletion request accepted for %s, operation_id=%s", network_id, operation.id)
         self._wait_for_operation(operation.id)
@@ -200,6 +235,8 @@ class YandexCloudFacade:
         try:
             operation = client.Delete(DeleteSubnetRequest(subnet_id=subnet_id))
         except Exception as exc:
+            if self._delete_missing_is_success("subnet", subnet_id, exc):
+                return
             raise CloudProviderError(f"Failed to submit subnet deletion request for '{subnet_id}': {exc}") from exc
         logger.info("Subnet deletion request accepted for %s, operation_id=%s", subnet_id, operation.id)
         self._wait_for_operation(operation.id)
@@ -263,6 +300,8 @@ class YandexCloudFacade:
         try:
             operation = client.Delete(DeleteDiskRequest(disk_id=disk_id))
         except Exception as exc:
+            if self._delete_missing_is_success("disk", disk_id, exc):
+                return
             raise CloudProviderError(f"Failed to submit disk deletion request for '{disk_id}': {exc}") from exc
         logger.info("Disk deletion request accepted for %s, operation_id=%s", disk_id, operation.id)
         self._wait_for_operation(operation.id)
@@ -375,6 +414,8 @@ class YandexCloudFacade:
         try:
             operation = client.Delete(DeleteSecurityGroupRequest(security_group_id=security_group_id))
         except Exception as exc:
+            if self._delete_missing_is_success("security group", security_group_id, exc):
+                return
             raise CloudProviderError(
                 f"Failed to submit security group deletion request for '{security_group_id}': {exc}",
             ) from exc
@@ -527,7 +568,7 @@ class YandexCloudFacade:
             platform_id=platform_id,
             labels=labels,
             resources_spec=resources_spec,
-            metadata={"ssh-keys": f"{username}:{ssh_public_key}"},
+            metadata={"user-data": _build_cloud_init_user_data(username, ssh_public_key)},
             boot_disk_spec=boot_disk_spec,
             secondary_disk_specs=secondary_disk_specs,
             network_interface_specs=[network_interface_spec],
@@ -555,6 +596,8 @@ class YandexCloudFacade:
         try:
             operation = client.Delete(DeleteInstanceRequest(instance_id=instance_id))
         except Exception as exc:
+            if self._delete_missing_is_success("instance", instance_id, exc):
+                return
             raise CloudProviderError(f"Failed to submit instance deletion request for '{instance_id}': {exc}") from exc
         logger.info("Instance deletion request accepted for %s, operation_id=%s", instance_id, operation.id)
         self._wait_for_operation(operation.id)
