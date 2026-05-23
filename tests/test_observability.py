@@ -2,7 +2,7 @@ from pathlib import Path
 
 from typer.testing import CliRunner
 
-from iac_tool.cli import app
+from iac_tool.cli import _diagnostic_hints, app
 from iac_tool.observability import format_exception_chain
 
 
@@ -79,3 +79,13 @@ def test_validate_writes_detailed_logs_to_file(tmp_path: Path) -> None:
     content = log_path.read_text(encoding="utf-8")
     assert "Validating manifest" in content
     assert "is valid; state file is" in content
+
+
+def test_resource_exhausted_external_address_error_gets_actionable_hint() -> None:
+    hints = _diagnostic_hints(
+        "Cloud operation failed with code 8: RESOURCE_EXHAUSTED: "
+        "Quota limit vpc.externalAddressesCreation.rate exceeded",
+    )
+
+    assert "rate-limited public IPv4 allocation" in hints[0]
+    assert "assign_public_ip: false" in hints[0]

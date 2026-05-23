@@ -196,15 +196,29 @@ def _ensure_confirm(confirm: bool, action: str) -> None:
         )
 
 
+def _diagnostic_hints(message: str) -> list[str]:
+    hints = ["rerun with --verbose or add --log-file ./iac-tool.log for detailed diagnostics."]
+    if "RESOURCE_EXHAUSTED" in message and "vpc.externalAddressesCreation.rate" in message:
+        hints.insert(
+            0,
+            "Yandex Cloud rate-limited public IPv4 allocation. Wait a few minutes and retry, "
+            "or set assign_public_ip: false for instances that do not need direct SSH access.",
+        )
+    elif "RESOURCE_EXHAUSTED" in message:
+        hints.insert(
+            0,
+            "A Yandex Cloud quota or rate limit was reached. Check quotas in the console, "
+            "reduce requested resources, or retry after the rate-limit window resets.",
+        )
+    return hints
+
+
 def _handle_cli_error(exc: IaCToolError) -> None:
     message = format_exception_chain(exc)
     logger.exception("Command failed: %s", message)
     typer.secho(message, fg=typer.colors.RED, err=True)
-    typer.secho(
-        "Tip: rerun with --verbose or add --log-file ./iac-tool.log for detailed diagnostics.",
-        fg=typer.colors.YELLOW,
-        err=True,
-    )
+    for hint in _diagnostic_hints(message):
+        typer.secho(f"Tip: {hint}", fg=typer.colors.YELLOW, err=True)
     raise typer.Exit(code=1) from exc
 
 
