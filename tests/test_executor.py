@@ -83,7 +83,14 @@ def test_executor_applies_and_destroys_in_dependency_order(tmp_path: Path) -> No
     planner = Planner.from_manifest(manifest)
     store = StateStore.for_manifest(manifest_path)
     facade = FakeFacade()
-    executor = PlanExecutor(facade, store)
+    events: list[tuple[str, int, int, str]] = []
+    executor = PlanExecutor(
+        facade,
+        store,
+        progress_callback=lambda event, index, total, command: events.append(
+            (event, index, total, command.description()),
+        ),
+    )
 
     apply_plan = planner.build_apply_plan(store.load())
     executor.execute(apply_plan)
@@ -91,12 +98,21 @@ def test_executor_applies_and_destroys_in_dependency_order(tmp_path: Path) -> No
 
     assert facade.calls == ["create_network", "create_subnet", "create_instance"]
     assert set(saved_state.resources) == {"network", "subnet", "instance"}
+    assert events[:2] == [
+        ("start", 1, 3, "create network:network"),
+        ("done", 1, 3, "create network:network"),
+    ]
 
+    events.clear()
     destroy_plan = planner.build_destroy_plan(saved_state)
     executor.execute(destroy_plan)
 
     assert facade.calls[-3:] == ["delete_instance", "delete_subnet", "delete_network"]
     assert not store.load().resources
+    assert events[:2] == [
+        ("start", 1, 3, "delete instance:instance"),
+        ("done", 1, 3, "delete instance:instance"),
+    ]
 
 
 def test_executor_deletes_orphaned_state_resource(tmp_path: Path) -> None:

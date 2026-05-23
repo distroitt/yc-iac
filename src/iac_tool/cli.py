@@ -6,6 +6,7 @@ from pathlib import Path
 import typer
 
 from .auth import load_auth_config
+from .commands import PlanCommand
 from .drift import DriftReport, DriftDetector
 from .exceptions import IaCToolError
 from .executor import PlanExecutor
@@ -175,6 +176,17 @@ def _print_outputs_after_apply(
 
     typer.echo("Live outputs:")
     _print_outputs_report(report, store.path)
+
+
+def _print_execution_progress(event: str, index: int, total: int, command: PlanCommand) -> None:
+    if event == "start":
+        typer.echo(f"[{index}/{total}] {command.description()} ...")
+        return
+    if event == "done":
+        typer.echo(f"[{index}/{total}] {command.description()} completed.")
+        return
+    if event == "failed":
+        typer.secho(f"[{index}/{total}] {command.description()} failed.", fg=typer.colors.RED, err=True)
 
 
 def _ensure_confirm(confirm: bool, action: str) -> None:
@@ -490,7 +502,7 @@ def apply(
             return
 
         facade = YandexCloudFacade(load_auth_config(auth_config))
-        executor = PlanExecutor(facade, store)
+        executor = PlanExecutor(facade, store, progress_callback=_print_execution_progress)
         executed = executor.execute(execution_plan)
         logger.info("Apply completed for %s", manifest)
         typer.echo("Apply completed.")
@@ -548,7 +560,7 @@ def destroy(
             return
 
         facade = YandexCloudFacade(load_auth_config(auth_config))
-        executor = PlanExecutor(facade, store)
+        executor = PlanExecutor(facade, store, progress_callback=_print_execution_progress)
         executed = executor.execute(execution_plan)
         logger.info("Destroy completed for %s", manifest)
         typer.echo("Destroy completed.")

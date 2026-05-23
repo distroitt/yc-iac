@@ -100,6 +100,8 @@ def test_apply_prints_live_outputs_after_success(monkeypatch, tmp_path: Path) ->
     result = runner.invoke(app, ["apply", str(manifest_path), "--confirm"])
 
     assert result.exit_code == 0
+    assert "[1/1] create network:network ..." in result.stdout
+    assert "[1/1] create network:network completed." in result.stdout
     assert "Apply completed." in result.stdout
     assert "Live outputs:" in result.stdout
     assert "available" in result.stdout
