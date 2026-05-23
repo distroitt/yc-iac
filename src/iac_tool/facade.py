@@ -195,6 +195,34 @@ class YandexCloudFacade:
             "labels": dict(network.labels),
         }
 
+    def update_network(
+        self,
+        *,
+        network_id: str,
+        name: str,
+        labels: dict[str, str],
+        update_mask_paths: list[str],
+    ) -> None:
+        from google.protobuf.field_mask_pb2 import FieldMask
+        from yandex.cloud.vpc.v1.network_service_pb2 import UpdateNetworkMetadata, UpdateNetworkRequest
+        from yandex.cloud.vpc.v1.network_service_pb2_grpc import NetworkServiceStub
+
+        client = self.sdk.client(NetworkServiceStub)
+        logger.info("Submitting network update request for %s", network_id)
+        try:
+            operation = client.Update(
+                UpdateNetworkRequest(
+                    network_id=network_id,
+                    update_mask=FieldMask(paths=update_mask_paths),
+                    name=name,
+                    labels=labels,
+                ),
+            )
+        except Exception as exc:
+            raise CloudProviderError(f"Failed to submit network update request for '{network_id}': {exc}") from exc
+        logger.info("Network update request accepted for %s, operation_id=%s", network_id, operation.id)
+        self._wait_for_operation(operation.id, UpdateNetworkMetadata)
+
     def create_subnet(
         self,
         folder_id: str,
@@ -258,6 +286,36 @@ class YandexCloudFacade:
             "zone_id": subnet.zone_id,
             "cidr_blocks": sorted(subnet.v4_cidr_blocks),
         }
+
+    def update_subnet(
+        self,
+        *,
+        subnet_id: str,
+        name: str,
+        cidr: str,
+        labels: dict[str, str],
+        update_mask_paths: list[str],
+    ) -> None:
+        from google.protobuf.field_mask_pb2 import FieldMask
+        from yandex.cloud.vpc.v1.subnet_service_pb2 import UpdateSubnetMetadata, UpdateSubnetRequest
+        from yandex.cloud.vpc.v1.subnet_service_pb2_grpc import SubnetServiceStub
+
+        client = self.sdk.client(SubnetServiceStub)
+        logger.info("Submitting subnet update request for %s", subnet_id)
+        try:
+            operation = client.Update(
+                UpdateSubnetRequest(
+                    subnet_id=subnet_id,
+                    update_mask=FieldMask(paths=update_mask_paths),
+                    name=name,
+                    v4_cidr_blocks=[cidr],
+                    labels=labels,
+                ),
+            )
+        except Exception as exc:
+            raise CloudProviderError(f"Failed to submit subnet update request for '{subnet_id}': {exc}") from exc
+        logger.info("Subnet update request accepted for %s, operation_id=%s", subnet_id, operation.id)
+        self._wait_for_operation(operation.id, UpdateSubnetMetadata)
 
     def create_disk(
         self,
@@ -324,6 +382,36 @@ class YandexCloudFacade:
             "size_gb": disk.size // GIBIBYTE,
             "instance_ids": sorted(disk.instance_ids),
         }
+
+    def update_disk(
+        self,
+        *,
+        disk_id: str,
+        name: str,
+        size_gb: int,
+        labels: dict[str, str],
+        update_mask_paths: list[str],
+    ) -> None:
+        from google.protobuf.field_mask_pb2 import FieldMask
+        from yandex.cloud.compute.v1.disk_service_pb2 import UpdateDiskMetadata, UpdateDiskRequest
+        from yandex.cloud.compute.v1.disk_service_pb2_grpc import DiskServiceStub
+
+        client = self.sdk.client(DiskServiceStub)
+        logger.info("Submitting disk update request for %s", disk_id)
+        try:
+            operation = client.Update(
+                UpdateDiskRequest(
+                    disk_id=disk_id,
+                    update_mask=FieldMask(paths=update_mask_paths),
+                    name=name,
+                    size=size_gb * GIBIBYTE,
+                    labels=labels,
+                ),
+            )
+        except Exception as exc:
+            raise CloudProviderError(f"Failed to submit disk update request for '{disk_id}': {exc}") from exc
+        logger.info("Disk update request accepted for %s, operation_id=%s", disk_id, operation.id)
+        self._wait_for_operation(operation.id, UpdateDiskMetadata)
 
     def _build_security_group_rule_specs(
         self,
@@ -463,6 +551,47 @@ class YandexCloudFacade:
             "network_id": security_group.network_id,
             "rules": rules,
         }
+
+    def update_security_group(
+        self,
+        *,
+        security_group_id: str,
+        name: str,
+        labels: dict[str, str],
+        ingress_rules: list[dict[str, Any]],
+        egress_rules: list[dict[str, Any]],
+        update_mask_paths: list[str],
+    ) -> None:
+        from google.protobuf.field_mask_pb2 import FieldMask
+        from yandex.cloud.vpc.v1.security_group_service_pb2 import UpdateSecurityGroupMetadata, UpdateSecurityGroupRequest
+        from yandex.cloud.vpc.v1.security_group_service_pb2_grpc import SecurityGroupServiceStub
+
+        client = self.sdk.client(SecurityGroupServiceStub)
+        rule_specs = self._build_security_group_rule_specs(
+            ingress_rules=ingress_rules,
+            egress_rules=egress_rules,
+        )
+        logger.info("Submitting security group update request for %s", security_group_id)
+        try:
+            operation = client.Update(
+                UpdateSecurityGroupRequest(
+                    security_group_id=security_group_id,
+                    update_mask=FieldMask(paths=update_mask_paths),
+                    name=name,
+                    labels=labels,
+                    rule_specs=rule_specs,
+                ),
+            )
+        except Exception as exc:
+            raise CloudProviderError(
+                f"Failed to submit security group update request for '{security_group_id}': {exc}",
+            ) from exc
+        logger.info(
+            "Security group update request accepted for %s, operation_id=%s",
+            security_group_id,
+            operation.id,
+        )
+        self._wait_for_operation(operation.id, UpdateSecurityGroupMetadata)
 
     def resolve_image_id(self, image_folder_id: str, image_family: str) -> str:
         from yandex.cloud.compute.v1.image_service_pb2 import GetImageLatestByFamilyRequest
@@ -631,6 +760,48 @@ class YandexCloudFacade:
             operation.id,
         )
         self._wait_for_operation(operation.id, UpdateInstanceNetworkInterfaceMetadata)
+
+    def update_instance(
+        self,
+        *,
+        instance_id: str,
+        name: str,
+        labels: dict[str, str],
+        cores: int,
+        memory_gb: int,
+        preemptible: bool,
+        update_mask_paths: list[str],
+    ) -> None:
+        from google.protobuf.field_mask_pb2 import FieldMask
+        from yandex.cloud.compute.v1.instance_pb2 import SchedulingPolicy
+        from yandex.cloud.compute.v1.instance_service_pb2 import (
+            ResourcesSpec,
+            UpdateInstanceMetadata,
+            UpdateInstanceRequest,
+        )
+        from yandex.cloud.compute.v1.instance_service_pb2_grpc import InstanceServiceStub
+
+        client = self.sdk.client(InstanceServiceStub)
+        logger.info("Submitting instance update request for %s", instance_id)
+        try:
+            operation = client.Update(
+                UpdateInstanceRequest(
+                    instance_id=instance_id,
+                    update_mask=FieldMask(paths=update_mask_paths),
+                    name=name,
+                    labels=labels,
+                    resources_spec=ResourcesSpec(
+                        cores=cores,
+                        memory=memory_gb * GIBIBYTE,
+                        core_fraction=100,
+                    ),
+                    scheduling_policy=SchedulingPolicy(preemptible=preemptible),
+                ),
+            )
+        except Exception as exc:
+            raise CloudProviderError(f"Failed to submit instance update request for '{instance_id}': {exc}") from exc
+        logger.info("Instance update request accepted for %s, operation_id=%s", instance_id, operation.id)
+        self._wait_for_operation(operation.id, UpdateInstanceMetadata)
 
     def describe_instance(self, instance_id: str) -> dict[str, object]:
         from yandex.cloud.compute.v1.instance_pb2 import Instance

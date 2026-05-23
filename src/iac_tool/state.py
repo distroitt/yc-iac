@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import json
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
@@ -15,6 +16,7 @@ class ResourceState(BaseModel):
     resource_type: str
     resource_id: str
     config_hash: str
+    config_payload: dict[str, Any] = Field(default_factory=dict)
     dependencies: list[str] = Field(default_factory=list)
     metadata: dict[str, str] = Field(default_factory=dict)
 

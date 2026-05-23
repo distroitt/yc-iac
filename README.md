@@ -10,7 +10,7 @@
 - `graph` генерирует граф зависимостей ресурсов в формате Graphviz DOT.
 - `drift-detect` сверяет манифест и `state.json` с реальным состоянием в Yandex Cloud.
 - `outputs` показывает стандартные live-outputs по управляемым ресурсам.
-- `apply --confirm` создает, пересоздает и удаляет ресурсы, которые были исключены из манифеста.
+- `apply --confirm` создает, обновляет, пересоздает и удаляет ресурсы, которые были исключены из манифеста.
 - `destroy --confirm` удаляет всю инфраструктуру из `state.json` в обратном порядке зависимостей.
 - Поддерживаются ресурсы `network`, `security_group`, `subnet`, `disk`, `instance`.
 
@@ -24,10 +24,12 @@
 
 - `Facade`: класс `YandexCloudFacade` скрывает детали SDK и gRPC-вызовов.
 - `Factory`: `ResourceHandlerFactory` создает обработчики ресурсов из манифеста.
-- `Command`: операции плана представлены командами `CreateResourceCommand`, `DeleteResourceCommand` и `DeleteStateResourceCommand`.
+- `Command`: операции плана представлены командами `CreateResourceCommand`, `UpdateResourceCommand`, `DeleteResourceCommand` и `DeleteStateResourceCommand`.
 - Полиморфизм и абстрактный базовый класс: `CloudResourceHandler` задает общий контракт для разных типов ресурсов.
 
 Планировщик строит порядок операций по графу зависимостей, поэтому ресурсы создаются после своих зависимостей, а удаляются в обратном порядке. Если ресурс присутствует в `state.json`, но отсутствует в текущем манифесте, он попадает в план как `delete`.
+
+Для части изменений инструмент выполняет `update` без пересоздания ресурса. В текущей версии обновляются `name` и `labels` у базовых ресурсов, CIDR у `subnet`, правила у `security_group`, размер у `disk`, а также `name`, `labels`, `cores`, `memory_gb`, `preemptible` и `security_groups` у `instance`. Изменения полей, которые безопаснее заменить целиком, например образ VM, пользователь SSH или boot disk, остаются `replace`.
 
 ## Структура проекта
 

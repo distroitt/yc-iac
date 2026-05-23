@@ -17,6 +17,9 @@ class FakeFacade:
     def delete_network(self, network_id: str) -> None:
         self.calls.append("delete_network")
 
+    def update_network(self, **kwargs: object) -> None:
+        self.calls.append(f"update_network:{kwargs['network_id']}:{','.join(kwargs['update_mask_paths'])}")
+
     def create_subnet(
         self,
         folder_id: str,
@@ -32,12 +35,18 @@ class FakeFacade:
     def delete_subnet(self, subnet_id: str) -> None:
         self.calls.append("delete_subnet")
 
+    def update_subnet(self, **kwargs: object) -> None:
+        self.calls.append(f"update_subnet:{kwargs['subnet_id']}:{','.join(kwargs['update_mask_paths'])}")
+
     def create_security_group(self, **kwargs: object) -> str:
         self.calls.append("create_security_group")
         return f"sg-{kwargs['name']}"
 
     def delete_security_group(self, security_group_id: str) -> None:
         self.calls.append("delete_security_group")
+
+    def update_security_group(self, **kwargs: object) -> None:
+        self.calls.append(f"update_security_group:{kwargs['security_group_id']}:{','.join(kwargs['update_mask_paths'])}")
 
     def create_instance(self, **kwargs: object) -> str:
         self.calls.append("create_instance")
@@ -46,8 +55,14 @@ class FakeFacade:
     def delete_instance(self, instance_id: str) -> None:
         self.calls.append("delete_instance")
 
+    def update_instance(self, **kwargs: object) -> None:
+        self.calls.append(f"update_instance:{kwargs['instance_id']}:{','.join(kwargs['update_mask_paths'])}")
+
     def delete_disk(self, disk_id: str) -> None:
         self.calls.append("delete_disk")
+
+    def update_disk(self, **kwargs: object) -> None:
+        self.calls.append(f"update_disk:{kwargs['disk_id']}:{','.join(kwargs['update_mask_paths'])}")
 
     def update_instance_security_groups(self, instance_id: str, security_group_ids: list[str]) -> None:
         self.calls.append(f"update_instance_security_groups:{instance_id}:{','.join(security_group_ids)}")
@@ -242,3 +257,27 @@ instances:
     ]
     updated_instance = store.load().require("instance")
     assert updated_instance.dependencies == ["subnet", "ssh-access", "web-access"]
+    assert updated_instance.config_payload["security_groups"] == ["ssh-access", "web-access"]
+
+
+def test_executor_updates_network_in_place_and_refreshes_state_payload(tmp_path: Path) -> None:
+    manifest_path = _manifest_file(tmp_path)
+    manifest = load_manifest(manifest_path)
+    planner = Planner.from_manifest(manifest)
+    store = StateStore.for_manifest(manifest_path)
+    facade = FakeFacade()
+    executor = PlanExecutor(facade, store)
+
+    executor.execute(planner.build_apply_plan(store.load()))
+    manifest_path.write_text(
+        manifest_path.read_text(encoding="utf-8").replace("demo-network", "renamed-network"),
+        encoding="utf-8",
+    )
+    planner = Planner.from_manifest(load_manifest(manifest_path))
+    facade.calls.clear()
+
+    executor.execute(planner.build_apply_plan(store.load()))
+
+    assert facade.calls == ["update_network:net-1:name"]
+    updated_network = store.load().require("network")
+    assert updated_network.config_payload["name"] == "renamed-network"

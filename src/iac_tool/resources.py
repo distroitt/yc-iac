@@ -48,8 +48,26 @@ class CloudResourceHandler(ABC):
     def delete(self, facade: "YandexCloudFacade", resource: ResourceState) -> None:
         raise NotImplementedError
 
+    @property
+    def updatable_fields(self) -> set[str]:
+        return set()
+
+    def changed_fields(self, resource: ResourceState) -> set[str]:
+        old_payload = resource.config_payload
+        if not old_payload:
+            return set()
+        new_payload = self.fingerprint_payload()
+        return {
+            key
+            for key in old_payload.keys() | new_payload.keys()
+            if old_payload.get(key) != new_payload.get(key)
+        }
+
     def can_update(self, resource: ResourceState) -> bool:
-        return False
+        if resource.resource_type != self.resource_type:
+            return False
+        changed = self.changed_fields(resource)
+        return bool(changed) and changed <= self.updatable_fields
 
     def dependency_change_requires_replace(self, dependency: str, dependency_kind: str) -> bool:
         return True
@@ -66,6 +84,7 @@ class CloudResourceHandler(ABC):
             resource_type=self.resource_type,
             resource_id=resource_id,
             config_hash=self.config_hash(),
+            config_payload=self.fingerprint_payload(),
             dependencies=list(self.dependencies),
             metadata=metadata or {},
         )
@@ -100,6 +119,19 @@ class NetworkResourceHandler(CloudResourceHandler):
 
     def delete(self, facade: "YandexCloudFacade", resource: ResourceState) -> None:
         facade.delete_network(resource.resource_id)
+
+    @property
+    def updatable_fields(self) -> set[str]:
+        return {"name", "labels"}
+
+    def update(self, facade: "YandexCloudFacade", state: InfrastructureState, resource: ResourceState) -> ResourceState:
+        facade.update_network(
+            network_id=resource.resource_id,
+            name=self.config.name,
+            labels=self.config.labels,
+            update_mask_paths=sorted(self.changed_fields(resource)),
+        )
+        return self.build_state(resource.resource_id, metadata=resource.metadata)
 
 
 class SubnetResourceHandler(CloudResourceHandler):
@@ -145,6 +177,21 @@ class SubnetResourceHandler(CloudResourceHandler):
     def delete(self, facade: "YandexCloudFacade", resource: ResourceState) -> None:
         facade.delete_subnet(resource.resource_id)
 
+    @property
+    def updatable_fields(self) -> set[str]:
+        return {"name", "cidr", "labels"}
+
+    def update(self, facade: "YandexCloudFacade", state: InfrastructureState, resource: ResourceState) -> ResourceState:
+        mask_paths = ["v4_cidr_blocks" if field == "cidr" else field for field in sorted(self.changed_fields(resource))]
+        facade.update_subnet(
+            subnet_id=resource.resource_id,
+            name=self.config.name,
+            cidr=self.config.cidr,
+            labels=self.config.labels,
+            update_mask_paths=mask_paths,
+        )
+        return self.build_state(resource.resource_id, metadata=resource.metadata)
+
 
 class DiskResourceHandler(CloudResourceHandler):
     def __init__(self, provider: ProviderConfig, config: DiskConfig) -> None:
@@ -181,6 +228,21 @@ class DiskResourceHandler(CloudResourceHandler):
 
     def delete(self, facade: "YandexCloudFacade", resource: ResourceState) -> None:
         facade.delete_disk(resource.resource_id)
+
+    @property
+    def updatable_fields(self) -> set[str]:
+        return {"name", "size_gb", "labels"}
+
+    def update(self, facade: "YandexCloudFacade", state: InfrastructureState, resource: ResourceState) -> ResourceState:
+        mask_paths = ["size" if field == "size_gb" else field for field in sorted(self.changed_fields(resource))]
+        facade.update_disk(
+            disk_id=resource.resource_id,
+            name=self.config.name,
+            size_gb=self.config.size_gb,
+            labels=self.config.labels,
+            update_mask_paths=mask_paths,
+        )
+        return self.build_state(resource.resource_id, metadata=resource.metadata)
 
 
 class SecurityGroupResourceHandler(CloudResourceHandler):
@@ -225,6 +287,23 @@ class SecurityGroupResourceHandler(CloudResourceHandler):
 
     def delete(self, facade: "YandexCloudFacade", resource: ResourceState) -> None:
         facade.delete_security_group(resource.resource_id)
+
+    @property
+    def updatable_fields(self) -> set[str]:
+        return {"name", "ingress_rules", "egress_rules", "labels"}
+
+    def update(self, facade: "YandexCloudFacade", state: InfrastructureState, resource: ResourceState) -> ResourceState:
+        changed = self.changed_fields(resource)
+        mask_paths = ["rule_specs" if field in {"ingress_rules", "egress_rules"} else field for field in sorted(changed)]
+        facade.update_security_group(
+            security_group_id=resource.resource_id,
+            name=self.config.name,
+            labels=self.config.labels,
+            ingress_rules=[rule.model_dump(mode="json") for rule in self.config.ingress_rules],
+            egress_rules=[rule.model_dump(mode="json") for rule in self.config.egress_rules],
+            update_mask_paths=sorted(set(mask_paths)),
+        )
+        return self.build_state(resource.resource_id, metadata=resource.metadata)
 
 
 class InstanceResourceHandler(CloudResourceHandler):
@@ -272,9 +351,15 @@ class InstanceResourceHandler(CloudResourceHandler):
         payload["security_groups"] = security_groups
         return payload
 
+    @property
+    def updatable_fields(self) -> set[str]:
+        return {"name", "cores", "memory_gb", "preemptible", "security_groups", "labels"}
+
     def can_update(self, resource: ResourceState) -> bool:
         if resource.resource_type != self.resource_type:
             return False
+        if resource.config_payload:
+            return super().can_update(resource)
         old_security_groups = [
             dependency
             for dependency in resource.dependencies
@@ -337,10 +422,31 @@ class InstanceResourceHandler(CloudResourceHandler):
             if security_group_state is None:
                 raise ExecutionError(f"Dependency '{logical_name}' is missing from state")
             security_group_ids.append(security_group_state.resource_id)
-        facade.update_instance_security_groups(
-            instance_id=resource.resource_id,
-            security_group_ids=security_group_ids,
-        )
+        changed = self.changed_fields(resource)
+        instance_fields = changed - {"security_groups"}
+        if instance_fields:
+            mask_paths = []
+            for field in sorted(instance_fields):
+                if field in {"cores", "memory_gb"}:
+                    mask_paths.append("resources_spec")
+                elif field == "preemptible":
+                    mask_paths.append("scheduling_policy")
+                else:
+                    mask_paths.append(field)
+            facade.update_instance(
+                instance_id=resource.resource_id,
+                name=self.config.name,
+                labels=self.config.labels,
+                cores=self.config.cores,
+                memory_gb=self.config.memory_gb,
+                preemptible=self.config.preemptible,
+                update_mask_paths=sorted(set(mask_paths)),
+            )
+        if "security_groups" in changed or not resource.config_payload:
+            facade.update_instance_security_groups(
+                instance_id=resource.resource_id,
+                security_group_ids=security_group_ids,
+            )
         return self.build_state(resource.resource_id, metadata=resource.metadata)
 
 

@@ -90,15 +90,7 @@ def _matching_state(manifest_path: Path) -> InfrastructureState:
     handlers = ResourceHandlerFactory.build(manifest)
     state = InfrastructureState()
     for index, handler in enumerate(handlers, start=1):
-        state.put(
-            ResourceState(
-                logical_name=handler.logical_name,
-                resource_type=handler.resource_type,
-                resource_id=f"id-{index}",
-                config_hash=handler.config_hash(),
-                dependencies=list(handler.dependencies),
-            ),
-        )
+        state.put(handler.build_state(f"id-{index}"))
     return state
 
 
@@ -140,11 +132,11 @@ def test_plan_cascades_replace_to_dependents(tmp_path: Path) -> None:
     plan = planner.build_apply_plan(state)
 
     assert [change.kind for change in plan.changes] == [
-        ChangeKind.REPLACE,
-        ChangeKind.REPLACE,
-        ChangeKind.REPLACE,
+        ChangeKind.UPDATE,
+        ChangeKind.NOOP,
+        ChangeKind.NOOP,
     ]
-    assert len(plan.commands) == 6
+    assert [command.description() for command in plan.commands] == ["update network:network"]
 
 
 def test_plan_replaces_only_affected_dependency_branch(tmp_path: Path) -> None:
@@ -160,14 +152,14 @@ def test_plan_replaces_only_affected_dependency_branch(tmp_path: Path) -> None:
     change_kinds = {change.logical_name: change.kind for change in plan.changes}
 
     assert change_kinds == {
-        "network-a": ChangeKind.REPLACE,
+        "network-a": ChangeKind.UPDATE,
         "network-b": ChangeKind.NOOP,
-        "subnet-a": ChangeKind.REPLACE,
+        "subnet-a": ChangeKind.NOOP,
         "subnet-b": ChangeKind.NOOP,
-        "instance-a": ChangeKind.REPLACE,
+        "instance-a": ChangeKind.NOOP,
         "instance-b": ChangeKind.NOOP,
     }
-    assert len(plan.commands) == 6
+    assert [command.description() for command in plan.commands] == ["update network:network-a"]
 
 
 def test_plan_deletes_resources_removed_from_manifest(tmp_path: Path) -> None:
@@ -378,10 +370,23 @@ instances:
     ]
 
 
-def test_plan_still_replaces_instance_when_non_updatable_field_changes(tmp_path: Path) -> None:
+def test_plan_updates_instance_when_mutable_fields_change(tmp_path: Path) -> None:
     manifest_path = _manifest_file(tmp_path)
     state = _matching_state(manifest_path)
     content = manifest_path.read_text(encoding="utf-8").replace("demo-instance", "changed-instance")
+    manifest_path.write_text(content, encoding="utf-8")
+
+    plan = Planner.from_manifest(load_manifest(manifest_path)).build_apply_plan(state)
+    change_kinds = {change.logical_name: change.kind for change in plan.changes}
+
+    assert change_kinds["instance"] == ChangeKind.UPDATE
+    assert [command.description() for command in plan.commands] == ["update instance:instance"]
+
+
+def test_plan_still_replaces_instance_when_non_updatable_field_changes(tmp_path: Path) -> None:
+    manifest_path = _manifest_file(tmp_path)
+    state = _matching_state(manifest_path)
+    content = manifest_path.read_text(encoding="utf-8").replace('username: "yc-user"', 'username: "ubuntu"')
     manifest_path.write_text(content, encoding="utf-8")
 
     plan = Planner.from_manifest(load_manifest(manifest_path)).build_apply_plan(state)
@@ -392,6 +397,96 @@ def test_plan_still_replaces_instance_when_non_updatable_field_changes(tmp_path:
         "delete instance:instance",
         "create instance:instance",
     ]
+
+
+def test_plan_updates_mutable_resource_fields_in_place(tmp_path: Path) -> None:
+    ssh_key = tmp_path / "id_ed25519.pub"
+    ssh_key.write_text("ssh-ed25519 AAAATESTKEY test@example\n", encoding="utf-8")
+    manifest_path = tmp_path / "updates.yaml"
+    base_manifest = f"""
+provider:
+  folder_id: "folder-id"
+  zone_id: "ru-central1-a"
+  project_name: "oop-course-work"
+
+networks:
+  - logical_name: "network"
+    name: "demo-network"
+
+security_groups:
+  - logical_name: "ssh-access"
+    name: "demo-sg"
+    network: "network"
+    ingress_rules:
+      - protocol: "TCP"
+        from_port: 22
+        to_port: 22
+        cidr_blocks:
+          - "10.0.0.0/8"
+
+subnets:
+  - logical_name: "subnet"
+    name: "demo-subnet"
+    network: "network"
+    cidr: "10.10.0.0/24"
+
+disks:
+  - logical_name: "data-disk"
+    name: "demo-disk"
+    size_gb: 10
+
+instances:
+  - logical_name: "instance"
+    name: "demo-instance"
+    subnet: "subnet"
+    username: "yc-user"
+    ssh_public_key_path: "{ssh_key}"
+    cores: 2
+    memory_gb: 2
+    security_groups:
+      - "ssh-access"
+    data_disks:
+      - "data-disk"
+""".strip()
+    updated_manifest = base_manifest.replace("demo-network", "renamed-network")
+    updated_manifest = updated_manifest.replace("10.10.0.0/24", "10.10.1.0/24")
+    updated_manifest = updated_manifest.replace("10.0.0.0/8", "0.0.0.0/0")
+    updated_manifest = updated_manifest.replace("size_gb: 10", "size_gb: 12")
+    updated_manifest = updated_manifest.replace("cores: 2", "cores: 4")
+
+    manifest_path.write_text(base_manifest + "\n", encoding="utf-8")
+    state = _matching_state(manifest_path)
+    manifest_path.write_text(updated_manifest + "\n", encoding="utf-8")
+
+    plan = Planner.from_manifest(load_manifest(manifest_path)).build_apply_plan(state)
+
+    assert {change.logical_name: change.kind for change in plan.changes} == {
+        "network": ChangeKind.UPDATE,
+        "ssh-access": ChangeKind.UPDATE,
+        "subnet": ChangeKind.UPDATE,
+        "data-disk": ChangeKind.UPDATE,
+        "instance": ChangeKind.UPDATE,
+    }
+    assert [command.description() for command in plan.commands] == [
+        "update network:network",
+        "update security_group:ssh-access",
+        "update subnet:subnet",
+        "update disk:data-disk",
+        "update instance:instance",
+    ]
+
+
+def test_plan_replaces_resource_without_config_payload_for_non_security_group_update(tmp_path: Path) -> None:
+    manifest_path = _manifest_file(tmp_path)
+    state = _matching_state(manifest_path)
+    network = state.require("network")
+    state.put(network.model_copy(update={"config_payload": {}}))
+    content = manifest_path.read_text(encoding="utf-8").replace("demo-network", "changed-network")
+    manifest_path.write_text(content, encoding="utf-8")
+
+    plan = Planner.from_manifest(load_manifest(manifest_path)).build_apply_plan(state)
+
+    assert {change.logical_name: change.kind for change in plan.changes}["network"] == ChangeKind.REPLACE
 
 
 def test_destroy_plan_deletes_orphaned_state_resources(tmp_path: Path) -> None:

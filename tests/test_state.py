@@ -16,6 +16,7 @@ def test_state_store_roundtrip(tmp_path: Path) -> None:
             resource_type="network",
             resource_id="net-1",
             config_hash="abc",
+            config_payload={"name": "demo-network"},
             dependencies=[],
             metadata={"name": "demo-network"},
         ),
@@ -26,6 +27,34 @@ def test_state_store_roundtrip(tmp_path: Path) -> None:
 
     assert loaded.get("network") is not None
     assert loaded.get("network").resource_id == "net-1"
+    assert loaded.get("network").config_payload == {"name": "demo-network"}
+
+
+def test_state_store_accepts_legacy_resources_without_config_payload(tmp_path: Path) -> None:
+    state_path = tmp_path / "state.json"
+    state_path.write_text(
+        """
+{
+  "version": 1,
+  "resources": {
+    "network": {
+      "logical_name": "network",
+      "resource_type": "network",
+      "resource_id": "net-1",
+      "config_hash": "abc",
+      "dependencies": [],
+      "metadata": {}
+    }
+  }
+}
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    loaded = StateStore(state_path).load()
+
+    assert loaded.require("network").config_payload == {}
 
 
 def test_state_store_rejects_invalid_json(tmp_path: Path) -> None:
