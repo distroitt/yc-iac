@@ -476,7 +476,7 @@ instances:
     ]
 
 
-def test_plan_replaces_subnet_and_dependents_when_cidr_changes(tmp_path: Path) -> None:
+def test_plan_updates_subnet_without_replacing_dependents_when_cidr_changes(tmp_path: Path) -> None:
     manifest_path = _manifest_file(tmp_path)
     state = _matching_state(manifest_path)
     content = manifest_path.read_text(encoding="utf-8").replace("10.10.0.0/24", "10.10.1.0/24")
@@ -486,14 +486,9 @@ def test_plan_replaces_subnet_and_dependents_when_cidr_changes(tmp_path: Path) -
     change_kinds = {change.logical_name: change.kind for change in plan.changes}
 
     assert change_kinds["network"] == ChangeKind.NOOP
-    assert change_kinds["subnet"] == ChangeKind.REPLACE
-    assert change_kinds["instance"] == ChangeKind.REPLACE
-    assert [command.description() for command in plan.commands] == [
-        "delete instance:instance",
-        "delete subnet:subnet",
-        "create subnet:subnet",
-        "create instance:instance",
-    ]
+    assert change_kinds["subnet"] == ChangeKind.UPDATE
+    assert change_kinds["instance"] == ChangeKind.NOOP
+    assert [command.description() for command in plan.commands] == ["update subnet:subnet"]
 
 
 def test_plan_replaces_resource_without_config_payload_for_non_security_group_update(tmp_path: Path) -> None:

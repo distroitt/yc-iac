@@ -179,16 +179,25 @@ class SubnetResourceHandler(CloudResourceHandler):
 
     @property
     def updatable_fields(self) -> set[str]:
-        return {"name", "labels"}
+        return {"name", "cidr", "labels"}
 
     def update(self, facade: "YandexCloudFacade", state: InfrastructureState, resource: ResourceState) -> ResourceState:
-        facade.update_subnet(
-            subnet_id=resource.resource_id,
-            name=self.config.name,
-            cidr=self.config.cidr,
-            labels=self.config.labels,
-            update_mask_paths=sorted(self.changed_fields(resource)),
-        )
+        changed = self.changed_fields(resource)
+        stopped_instance_ids: list[str] = []
+        if "cidr" in changed:
+            stopped_instance_ids = _stop_running_instances_depending_on(facade, state, self.logical_name)
+        mask_paths = ["v4_cidr_blocks" if field == "cidr" else field for field in sorted(changed)]
+        try:
+            facade.update_subnet(
+                subnet_id=resource.resource_id,
+                name=self.config.name,
+                cidr=self.config.cidr,
+                labels=self.config.labels,
+                update_mask_paths=mask_paths,
+            )
+        finally:
+            for instance_id in stopped_instance_ids:
+                facade.start_instance(instance_id)
         return self.build_state(resource.resource_id, metadata=resource.metadata)
 
 
@@ -466,3 +475,17 @@ class ResourceHandlerFactory:
         handlers.extend(DiskResourceHandler(manifest.provider, disk) for disk in manifest.disks)
         handlers.extend(InstanceResourceHandler(manifest.provider, instance) for instance in manifest.instances)
         return handlers
+
+
+def _stop_running_instances_depending_on(
+    facade: "YandexCloudFacade",
+    state: InfrastructureState,
+    dependency: str,
+) -> list[str]:
+    stopped_instance_ids: list[str] = []
+    for resource in state.resources.values():
+        if resource.resource_type != "instance" or dependency not in resource.dependencies:
+            continue
+        if facade.stop_instance_if_running(resource.resource_id):
+            stopped_instance_ids.append(resource.resource_id)
+    return stopped_instance_ids
