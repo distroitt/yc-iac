@@ -179,16 +179,15 @@ class SubnetResourceHandler(CloudResourceHandler):
 
     @property
     def updatable_fields(self) -> set[str]:
-        return {"name", "cidr", "labels"}
+        return {"name", "labels"}
 
     def update(self, facade: "YandexCloudFacade", state: InfrastructureState, resource: ResourceState) -> ResourceState:
-        mask_paths = ["v4_cidr_blocks" if field == "cidr" else field for field in sorted(self.changed_fields(resource))]
         facade.update_subnet(
             subnet_id=resource.resource_id,
             name=self.config.name,
             cidr=self.config.cidr,
             labels=self.config.labels,
-            update_mask_paths=mask_paths,
+            update_mask_paths=sorted(self.changed_fields(resource)),
         )
         return self.build_state(resource.resource_id, metadata=resource.metadata)
 

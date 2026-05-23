@@ -449,7 +449,7 @@ instances:
       - "data-disk"
 """.strip()
     updated_manifest = base_manifest.replace("demo-network", "renamed-network")
-    updated_manifest = updated_manifest.replace("10.10.0.0/24", "10.10.1.0/24")
+    updated_manifest = updated_manifest.replace("demo-subnet", "renamed-subnet")
     updated_manifest = updated_manifest.replace("10.0.0.0/8", "0.0.0.0/0")
     updated_manifest = updated_manifest.replace("size_gb: 10", "size_gb: 12")
     updated_manifest = updated_manifest.replace("cores: 2", "cores: 4")
@@ -473,6 +473,26 @@ instances:
         "update subnet:subnet",
         "update disk:data-disk",
         "update instance:instance",
+    ]
+
+
+def test_plan_replaces_subnet_and_dependents_when_cidr_changes(tmp_path: Path) -> None:
+    manifest_path = _manifest_file(tmp_path)
+    state = _matching_state(manifest_path)
+    content = manifest_path.read_text(encoding="utf-8").replace("10.10.0.0/24", "10.10.1.0/24")
+    manifest_path.write_text(content, encoding="utf-8")
+
+    plan = Planner.from_manifest(load_manifest(manifest_path)).build_apply_plan(state)
+    change_kinds = {change.logical_name: change.kind for change in plan.changes}
+
+    assert change_kinds["network"] == ChangeKind.NOOP
+    assert change_kinds["subnet"] == ChangeKind.REPLACE
+    assert change_kinds["instance"] == ChangeKind.REPLACE
+    assert [command.description() for command in plan.commands] == [
+        "delete instance:instance",
+        "delete subnet:subnet",
+        "create subnet:subnet",
+        "create instance:instance",
     ]
 
 
