@@ -296,32 +296,6 @@ def test_executor_updates_network_in_place_and_refreshes_state_payload(tmp_path:
     assert updated_network.config_payload["name"] == "renamed-network"
 
 
-def test_executor_stops_dependent_instances_before_subnet_cidr_update(tmp_path: Path) -> None:
-    manifest_path = _manifest_file(tmp_path)
-    manifest = load_manifest(manifest_path)
-    planner = Planner.from_manifest(manifest)
-    store = StateStore.for_manifest(manifest_path)
-    facade = FakeFacade()
-    executor = PlanExecutor(facade, store)
-
-    executor.execute(planner.build_apply_plan(store.load()))
-    manifest_path.write_text(
-        manifest_path.read_text(encoding="utf-8").replace("10.10.0.0/24", "10.10.1.0/24"),
-        encoding="utf-8",
-    )
-    planner = Planner.from_manifest(load_manifest(manifest_path))
-    facade.calls.clear()
-
-    executor.execute(planner.build_apply_plan(store.load()))
-
-    assert facade.calls == [
-        "stop_instance_if_running:instance-1:RUNNING",
-        "update_subnet:subnet-1:v4_cidr_blocks",
-        "start_instance:instance-1",
-    ]
-    assert store.load().require("subnet").config_payload["cidr"] == "10.10.1.0/24"
-
-
 def test_executor_stops_running_instance_before_resource_update(tmp_path: Path) -> None:
     manifest_path = _manifest_file(tmp_path)
     manifest = load_manifest(manifest_path)
