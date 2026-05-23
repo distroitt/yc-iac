@@ -96,6 +96,36 @@ class DeleteResourceCommand(PlanCommand):
 
 
 @dataclass(frozen=True)
+class UpdateResourceCommand(PlanCommand):
+    handler: "CloudResourceHandler"
+    reason: str
+
+    @property
+    def logical_name(self) -> str:
+        return self.handler.logical_name
+
+    @property
+    def resource_type(self) -> str:
+        return self.handler.resource_type
+
+    def description(self) -> str:
+        return f"update {self.resource_type}:{self.logical_name}"
+
+    def execute(
+        self,
+        facade: "YandexCloudFacade",
+        state: "InfrastructureState",
+        state_store: "StateStore",
+    ) -> None:
+        resource = state.get(self.handler.logical_name)
+        if resource is None:
+            raise ExecutionError(f"Resource '{self.logical_name}' is missing from state")
+        updated = self.handler.update(facade, state, resource)
+        state.put(updated)
+        state_store.save(state)
+
+
+@dataclass(frozen=True)
 class DeleteStateResourceCommand(PlanCommand):
     resource: ResourceState
     reason: str

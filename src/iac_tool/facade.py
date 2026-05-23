@@ -602,6 +602,36 @@ class YandexCloudFacade:
         logger.info("Instance deletion request accepted for %s, operation_id=%s", instance_id, operation.id)
         self._wait_for_operation(operation.id)
 
+    def update_instance_security_groups(self, instance_id: str, security_group_ids: list[str]) -> None:
+        from google.protobuf.field_mask_pb2 import FieldMask
+        from yandex.cloud.compute.v1.instance_service_pb2 import (
+            UpdateInstanceNetworkInterfaceMetadata,
+            UpdateInstanceNetworkInterfaceRequest,
+        )
+        from yandex.cloud.compute.v1.instance_service_pb2_grpc import InstanceServiceStub
+
+        client = self.sdk.client(InstanceServiceStub)
+        logger.info("Submitting instance security group update request for %s", instance_id)
+        try:
+            operation = client.UpdateNetworkInterface(
+                UpdateInstanceNetworkInterfaceRequest(
+                    instance_id=instance_id,
+                    network_interface_index="0",
+                    update_mask=FieldMask(paths=["security_group_ids"]),
+                    security_group_ids=security_group_ids,
+                ),
+            )
+        except Exception as exc:
+            raise CloudProviderError(
+                f"Failed to submit instance security group update request for '{instance_id}': {exc}",
+            ) from exc
+        logger.info(
+            "Instance security group update request accepted for %s, operation_id=%s",
+            instance_id,
+            operation.id,
+        )
+        self._wait_for_operation(operation.id, UpdateInstanceNetworkInterfaceMetadata)
+
     def describe_instance(self, instance_id: str) -> dict[str, object]:
         from yandex.cloud.compute.v1.instance_pb2 import Instance
         from yandex.cloud.compute.v1.instance_service_pb2 import GetInstanceRequest

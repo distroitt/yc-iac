@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import StrEnum
 
-from .commands import CreateResourceCommand, DeleteResourceCommand, DeleteStateResourceCommand, PlanCommand
+from .commands import CreateResourceCommand, DeleteResourceCommand, DeleteStateResourceCommand, PlanCommand, UpdateResourceCommand
 from .exceptions import PlanningError
 from .manifest import Manifest
 from .resources import CloudResourceHandler, ResourceHandlerFactory
@@ -14,6 +14,7 @@ class ChangeKind(StrEnum):
     CREATE = "create"
     DELETE = "delete"
     REPLACE = "replace"
+    UPDATE = "update"
     NOOP = "noop"
 
 
@@ -93,6 +94,9 @@ class Planner:
             elif current.resource_type != handler.resource_type:
                 decisions[handler.logical_name] = ChangeKind.REPLACE
                 reasons[handler.logical_name] = "resource type changed"
+            elif current.config_hash != handler.config_hash() and handler.can_update(current):
+                decisions[handler.logical_name] = ChangeKind.UPDATE
+                reasons[handler.logical_name] = "configuration can be updated in place"
             elif current.config_hash != handler.config_hash():
                 decisions[handler.logical_name] = ChangeKind.REPLACE
                 reasons[handler.logical_name] = "configuration hash changed"
@@ -104,14 +108,33 @@ class Planner:
         while changed:
             changed = False
             for handler in self.handlers:
-                dependency_changes = [decisions[dependency] for dependency in handler.dependencies]
-                if not any(kind in {ChangeKind.CREATE, ChangeKind.REPLACE} for kind in dependency_changes):
+                changed_dependencies = [
+                    (dependency, decisions[dependency])
+                    for dependency in handler.dependencies
+                    if decisions[dependency] in {ChangeKind.CREATE, ChangeKind.REPLACE}
+                ]
+                if not changed_dependencies:
                     continue
                 current = state.get(handler.logical_name)
-                next_kind = ChangeKind.CREATE if current is None else ChangeKind.REPLACE
+                replace_required = any(
+                    handler.dependency_change_requires_replace(dependency, kind.value)
+                    for dependency, kind in changed_dependencies
+                )
+                if current is None:
+                    next_kind = ChangeKind.CREATE
+                elif replace_required:
+                    next_kind = ChangeKind.REPLACE
+                elif handler.can_update(current):
+                    next_kind = ChangeKind.UPDATE
+                else:
+                    next_kind = ChangeKind.REPLACE
                 if decisions[handler.logical_name] != next_kind:
                     decisions[handler.logical_name] = next_kind
-                    reasons[handler.logical_name] = "dependency will be recreated"
+                    reasons[handler.logical_name] = (
+                        "dependency will be recreated"
+                        if next_kind == ChangeKind.REPLACE
+                        else "security group dependency will be created"
+                    )
                     changed = True
 
         changes = [
@@ -161,6 +184,8 @@ class Planner:
             kind = decisions[handler.logical_name]
             if kind in {ChangeKind.CREATE, ChangeKind.REPLACE}:
                 commands.append(CreateResourceCommand(handler=handler, reason=reasons[handler.logical_name]))
+            elif kind == ChangeKind.UPDATE:
+                commands.append(UpdateResourceCommand(handler=handler, reason=reasons[handler.logical_name]))
 
         return ExecutionPlan(changes=changes, commands=commands)
 

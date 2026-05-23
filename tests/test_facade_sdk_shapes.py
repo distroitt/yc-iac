@@ -8,7 +8,9 @@ from yandex.cloud.compute.v1.instance_service_pb2 import (
     OneToOneNatSpec,
     PrimaryAddressSpec,
     ResourcesSpec,
+    UpdateInstanceNetworkInterfaceRequest,
 )
+from google.protobuf.field_mask_pb2 import FieldMask
 from yandex.cloud.vpc.v1.security_group_pb2 import CidrBlocks, PortRange
 from yandex.cloud.vpc.v1.security_group_service_pb2 import CreateSecurityGroupRequest, SecurityGroupRuleSpec
 import yaml
@@ -74,6 +76,20 @@ def test_get_instance_request_full_view_is_resolved_via_descriptor() -> None:
     request = GetInstanceRequest(instance_id="instance-id", view=full_view)
 
     assert request.view == full_view
+
+
+def test_update_instance_network_interface_request_supports_security_group_ids() -> None:
+    request = UpdateInstanceNetworkInterfaceRequest(
+        instance_id="instance-id",
+        network_interface_index="0",
+        update_mask=FieldMask(paths=["security_group_ids"]),
+        security_group_ids=["sg-1", "sg-2"],
+    )
+
+    assert request.instance_id == "instance-id"
+    assert request.network_interface_index == "0"
+    assert list(request.update_mask.paths) == ["security_group_ids"]
+    assert list(request.security_group_ids) == ["sg-1", "sg-2"]
 
 
 def test_cloud_init_user_data_creates_requested_ssh_user() -> None:

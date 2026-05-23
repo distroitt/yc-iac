@@ -48,6 +48,15 @@ class CloudResourceHandler(ABC):
     def delete(self, facade: "YandexCloudFacade", resource: ResourceState) -> None:
         raise NotImplementedError
 
+    def can_update(self, resource: ResourceState) -> bool:
+        return False
+
+    def dependency_change_requires_replace(self, dependency: str, dependency_kind: str) -> bool:
+        return True
+
+    def update(self, facade: "YandexCloudFacade", state: InfrastructureState, resource: ResourceState) -> ResourceState:
+        raise ExecutionError(f"Resource type '{self.resource_type}' does not support in-place updates")
+
     def config_hash(self) -> str:
         return _stable_hash(self.fingerprint_payload())
 
@@ -258,6 +267,27 @@ class InstanceResourceHandler(CloudResourceHandler):
             "zone_id": self.provider.zone_id,
         }
 
+    def _fingerprint_payload_with_security_groups(self, security_groups: list[str]) -> dict[str, Any]:
+        payload = self.fingerprint_payload()
+        payload["security_groups"] = security_groups
+        return payload
+
+    def can_update(self, resource: ResourceState) -> bool:
+        if resource.resource_type != self.resource_type:
+            return False
+        old_security_groups = [
+            dependency
+            for dependency in resource.dependencies
+            if dependency != self.config.subnet and dependency not in self.config.data_disks
+        ]
+        old_payload = self._fingerprint_payload_with_security_groups(old_security_groups)
+        return _stable_hash(old_payload) == resource.config_hash
+
+    def dependency_change_requires_replace(self, dependency: str, dependency_kind: str) -> bool:
+        if dependency in self.config.security_groups and dependency_kind == "create":
+            return False
+        return True
+
     def create(self, facade: "YandexCloudFacade", state: InfrastructureState) -> ResourceState:
         subnet_state = state.get(self.config.subnet)
         if subnet_state is None:
@@ -299,6 +329,19 @@ class InstanceResourceHandler(CloudResourceHandler):
 
     def delete(self, facade: "YandexCloudFacade", resource: ResourceState) -> None:
         facade.delete_instance(resource.resource_id)
+
+    def update(self, facade: "YandexCloudFacade", state: InfrastructureState, resource: ResourceState) -> ResourceState:
+        security_group_ids: list[str] = []
+        for logical_name in self.config.security_groups:
+            security_group_state = state.get(logical_name)
+            if security_group_state is None:
+                raise ExecutionError(f"Dependency '{logical_name}' is missing from state")
+            security_group_ids.append(security_group_state.resource_id)
+        facade.update_instance_security_groups(
+            instance_id=resource.resource_id,
+            security_group_ids=security_group_ids,
+        )
+        return self.build_state(resource.resource_id, metadata=resource.metadata)
 
 
 class ResourceHandlerFactory:
