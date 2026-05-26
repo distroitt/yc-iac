@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from zipfile import ZIP_DEFLATED, ZipFile
 import html
+import subprocess
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -11,6 +12,7 @@ OUTPUT = ROOT / "docs" / "coursework-explanatory-note.docx"
 
 NS_W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 NS_R = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+EMU_PER_CM = 360000
 
 
 def esc(value: str) -> str:
@@ -21,15 +23,120 @@ def attrs(**kwargs: str) -> str:
     return "".join(f' {key}="{esc(value)}"' for key, value in kwargs.items())
 
 
+def png_size(data: bytes) -> tuple[int, int]:
+    if data[:8] != b"\x89PNG\r\n\x1a\n":
+        raise ValueError("Expected PNG image data")
+    return int.from_bytes(data[16:20], "big"), int.from_bytes(data[20:24], "big")
+
+
+def render_dot(source: str) -> bytes:
+    completed = subprocess.run(
+        ["dot", "-Tpng"],
+        input=source.encode("utf-8"),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=True,
+    )
+    return completed.stdout
+
+
+def build_diagrams() -> dict[str, bytes]:
+    common = 'graph [fontname="Times New Roman", bgcolor="white", pad="0.25", nodesep="0.55", ranksep="0.7"]; node [fontname="Times New Roman", shape=box, style="rounded,filled", color="#334155", fillcolor="#F8FAFC", margin="0.12,0.08"]; edge [fontname="Times New Roman", color="#475569"];'
+    return {
+        "components": render_dot(
+            f"""
+digraph G {{
+  rankdir=LR;
+  {common}
+  cli [label="CLI\\nTyper commands", fillcolor="#DBEAFE"];
+  manifest [label="Manifest Loader\\nYAML + Pydantic", fillcolor="#E0F2FE"];
+  planner [label="Planner\\nplan: create/update/replace/delete", fillcolor="#DCFCE7"];
+  commands [label="Plan Commands\\nCommand pattern", fillcolor="#FEF3C7"];
+  executor [label="Executor\\nprogress + state save", fillcolor="#FFE4E6"];
+  facade [label="YandexCloudFacade\\nSDK facade", fillcolor="#EDE9FE"];
+  sdk [label="Yandex Cloud SDK\\ngRPC API", fillcolor="#F3E8FF"];
+  state [label="StateStore\\nstate.json", fillcolor="#F1F5F9"];
+  cli -> manifest -> planner -> commands -> executor -> facade -> sdk;
+  executor -> state;
+  planner -> state [label="read"];
+}}
+""",
+        ),
+        "apply": render_dot(
+            f"""
+digraph G {{
+  rankdir=TB;
+  {common}
+  start [label="1. User runs\\niac-tool apply --confirm", fillcolor="#DBEAFE"];
+  load [label="2. Load and validate manifest", fillcolor="#E0F2FE"];
+  plan [label="3. Build execution plan\\nfrom manifest + state", fillcolor="#DCFCE7"];
+  execute [label="4. Execute commands\\nin dependency order", fillcolor="#FEF3C7"];
+  save [label="5. Save state after\\neach successful command", fillcolor="#F1F5F9"];
+  outputs [label="6. Print live outputs", fillcolor="#EDE9FE"];
+  start -> load -> plan -> execute -> save -> outputs;
+  execute -> save [label="create/update/delete"];
+}}
+""",
+        ),
+        "resources": render_dot(
+            f"""
+digraph G {{
+  rankdir=LR;
+  {common}
+  network [label="network", fillcolor="#DBEAFE"];
+  sg [label="security_group\\nssh-access", fillcolor="#FCE7F3"];
+  subnet [label="subnet", fillcolor="#DCFCE7"];
+  disk [label="disk\\ndata-disk", fillcolor="#EDE9FE"];
+  instance [label="instance\\nVM", fillcolor="#FEF3C7"];
+  network -> sg;
+  network -> subnet;
+  subnet -> instance;
+  sg -> instance;
+  disk -> instance;
+}}
+""",
+        ),
+        "state": render_dot(
+            f"""
+digraph G {{
+  rankdir=LR;
+  {common}
+  manifest [label="manifest.yaml\\ndesired configuration", fillcolor="#E0F2FE"];
+  state [label="state.json\\nlogical_name -> resource_id\\nconfig_payload", fillcolor="#F1F5F9"];
+  cloud [label="Yandex Cloud\\nreal resources", fillcolor="#EDE9FE"];
+  plan [label="plan\\ncompare manifest with state", fillcolor="#DCFCE7"];
+  drift [label="drift-detect / outputs\\nlive describe_*", fillcolor="#FEF3C7"];
+  manifest -> plan;
+  state -> plan;
+  state -> cloud [label="resource_id"];
+  cloud -> drift;
+  manifest -> drift;
+  state -> drift;
+}}
+""",
+        ),
+    }
+
+
 @dataclass(frozen=True)
 class Paragraph:
     text: str
     kind: str = "normal"
 
 
+@dataclass(frozen=True)
+class ImageAsset:
+    rid: str
+    name: str
+    data: bytes
+    width_emu: int
+    height_emu: int
+
+
 class DocxBuilder:
     def __init__(self) -> None:
         self.body: list[str] = []
+        self.images: list[ImageAsset] = []
 
     def page_break(self) -> None:
         self.body.append('<w:p><w:r><w:br w:type="page"/></w:r></w:p>')
@@ -67,6 +174,40 @@ class DocxBuilder:
             self.body.append(self._code_paragraph_xml(text))
         else:
             self.body.append(self._paragraph_xml(text, align="both", bold=False, size=28, spacing_after=80, first_line=709))
+
+    def image(self, name: str, data: bytes, *, width_cm: float = 15.5) -> None:
+        width_px, height_px = png_size(data)
+        width_emu = int(width_cm * EMU_PER_CM)
+        height_emu = int(width_emu * height_px / width_px)
+        rid = f"rIdImage{len(self.images) + 1}"
+        asset = ImageAsset(rid=rid, name=name, data=data, width_emu=width_emu, height_emu=height_emu)
+        self.images.append(asset)
+        doc_pr_id = len(self.images)
+        self.body.append(
+            '<w:p><w:pPr><w:jc w:val="center"/><w:spacing w:before="120" w:after="80"/></w:pPr><w:r><w:drawing>'
+            '<wp:inline xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" '
+            'distT="0" distB="0" distL="0" distR="0">'
+            f'<wp:extent cx="{asset.width_emu}" cy="{asset.height_emu}"/>'
+            f'<wp:docPr id="{doc_pr_id}" name="{esc(name)}"/>'
+            '<wp:cNvGraphicFramePr><a:graphicFrameLocks xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" noChangeAspect="1"/>'
+            '</wp:cNvGraphicFramePr><a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">'
+            '<a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture">'
+            '<pic:pic xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture">'
+            '<pic:nvPicPr>'
+            f'<pic:cNvPr id="{doc_pr_id}" name="{esc(name)}"/>'
+            '<pic:cNvPicPr/>'
+            '</pic:nvPicPr>'
+            '<pic:blipFill>'
+            f'<a:blip r:embed="{asset.rid}" xmlns:r="{NS_R}"/>'
+            '<a:stretch><a:fillRect/></a:stretch>'
+            '</pic:blipFill>'
+            '<pic:spPr>'
+            f'<a:xfrm><a:off x="0" y="0"/><a:ext cx="{asset.width_emu}" cy="{asset.height_emu}"/></a:xfrm>'
+            '<a:prstGeom prst="rect"><a:avLst/></a:prstGeom>'
+            '</pic:spPr>'
+            '</pic:pic>'
+            '</a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>'
+        )
 
     def _paragraph_xml(
         self,
@@ -400,7 +541,7 @@ SOURCES = [
 ]
 
 
-def add_main_text(builder: DocxBuilder) -> None:
+def add_main_text(builder: DocxBuilder, diagrams: dict[str, bytes]) -> None:
     add_section(builder, "Введение", INTRO, numbered=False)
     add_section(builder, "1 Аналитический обзор предметной области", ANALYSIS)
     add_subsection(
@@ -414,6 +555,8 @@ def add_main_text(builder: DocxBuilder) -> None:
     )
     add_section(builder, "2 Требования к программному средству", REQUIREMENTS)
     add_section(builder, "3 Проектирование программного средства", DESIGN)
+    builder.image("component-architecture.png", diagrams["components"])
+    builder.paragraph("Рисунок 3.1 — Компонентная архитектура IaC-инструмента", "caption")
     add_subsection(
         builder,
         "3.1 Диаграммы и графические материалы",
@@ -423,7 +566,13 @@ def add_main_text(builder: DocxBuilder) -> None:
 Отдельным графическим материалом является граф зависимостей ресурсов. Он строится автоматически командой graph и может быть визуализирован средствами Graphviz. В отличие от статической диаграммы компонентов, этот граф зависит от конкретного манифеста. Поэтому он полезен как пользовательская функция и как материал для защиты: можно показать, что порядок создания и удаления вычисляется не вручную, а на основе зависимостей.
 """,
     )
+    builder.image("resource-dependency-graph.png", diagrams["resources"], width_cm=13.5)
+    builder.paragraph("Рисунок 3.2 — Граф зависимостей ресурсов демонстрационного манифеста", "caption")
+    builder.image("state-manifest-cloud.png", diagrams["state"])
+    builder.paragraph("Рисунок 3.3 — Связь манифеста, локального состояния и реального облака", "caption")
     add_section(builder, "4 Реализация программного средства", IMPLEMENTATION)
+    builder.image("apply-sequence.png", diagrams["apply"], width_cm=13.5)
+    builder.paragraph("Рисунок 4.1 — Последовательность выполнения команды apply", "caption")
     add_subsection(
         builder,
         "4.1 Пользовательский сценарий работы",
@@ -476,6 +625,7 @@ def content_types_xml() -> str:
         '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
         '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
         '<Default Extension="xml" ContentType="application/xml"/>'
+        '<Default Extension="png" ContentType="image/png"/>'
         '<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>'
         '<Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>'
         '<Override PartName="/word/settings.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml"/>'
@@ -494,11 +644,16 @@ def root_rels_xml() -> str:
     )
 
 
-def document_rels_xml() -> str:
+def document_rels_xml(images: list[ImageAsset]) -> str:
+    image_relationships = "".join(
+        f'<Relationship Id="{asset.rid}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/{asset.name}"/>'
+        for asset in images
+    )
     return (
         '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
         '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
         '<Relationship Id="rIdFooter1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/footer" Target="footer1.xml"/>'
+        f"{image_relationships}"
         "</Relationships>"
     )
 
@@ -551,21 +706,24 @@ def footer_xml() -> str:
 
 
 def build_docx() -> None:
+    diagrams = build_diagrams()
     builder = DocxBuilder()
     title_pages(builder)
-    add_main_text(builder)
+    add_main_text(builder, diagrams)
     add_appendix_code(builder)
 
     OUTPUT.parent.mkdir(parents=True, exist_ok=True)
     with ZipFile(OUTPUT, "w", ZIP_DEFLATED) as docx:
         docx.writestr("[Content_Types].xml", content_types_xml())
         docx.writestr("_rels/.rels", root_rels_xml())
-        docx.writestr("word/_rels/document.xml.rels", document_rels_xml())
+        docx.writestr("word/_rels/document.xml.rels", document_rels_xml(builder.images))
         docx.writestr("word/document.xml", builder.document_xml())
         docx.writestr("word/styles.xml", styles_xml())
         docx.writestr("word/settings.xml", settings_xml())
         docx.writestr("word/fontTable.xml", font_table_xml())
         docx.writestr("word/footer1.xml", footer_xml())
+        for asset in builder.images:
+            docx.writestr(f"word/media/{asset.name}", asset.data)
 
 
 if __name__ == "__main__":
