@@ -291,6 +291,12 @@ def add_subsection(builder: DocxBuilder, title: str, text: str) -> None:
         builder.paragraph(part)
 
 
+def add_inline_listing(builder: DocxBuilder, caption: str, code: str) -> None:
+    builder.paragraph(caption, "caption")
+    for line in code.strip("\n").splitlines():
+        builder.paragraph(line, "code")
+
+
 def title_pages(builder: DocxBuilder) -> None:
     for line in [
         "МИНИСТЕРСТВО ОБРАЗОВАНИЯ РЕСПУБЛИКИ БЕЛАРУСЬ",
@@ -570,9 +576,92 @@ def add_main_text(builder: DocxBuilder, diagrams: dict[str, bytes]) -> None:
     builder.paragraph("Рисунок 3.2 — Граф зависимостей ресурсов демонстрационного манифеста", "caption")
     builder.image("state-manifest-cloud.png", diagrams["state"])
     builder.paragraph("Рисунок 3.3 — Связь манифеста, локального состояния и реального облака", "caption")
+    builder.paragraph(
+        "Структура локального состояния является центральным элементом проектирования. В листинге 3.1 показано, что state хранит не только идентификатор ресурса в облаке, но и зависимости, hash и payload последней примененной конфигурации. Благодаря этому планировщик может принимать решение о типе изменения без обращения к облаку.",
+    )
+    add_inline_listing(
+        builder,
+        "Листинг 3.1 — Модель состояния управляемого ресурса",
+        """
+class ResourceState(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    logical_name: str
+    resource_type: str
+    resource_id: str
+    config_hash: str
+    config_payload: dict[str, Any] = Field(default_factory=dict)
+    dependencies: list[str] = Field(default_factory=list)
+    metadata: dict[str, str] = Field(default_factory=dict)
+""",
+    )
+    builder.paragraph(
+        "Решение о возможности обновления на месте вынесено в базовый обработчик ресурса. Листинг 3.2 показывает общий механизм: сравниваются старый и новый payload, после чего проверяется, входят ли измененные поля в множество updatable_fields конкретного ресурса.",
+    )
+    add_inline_listing(
+        builder,
+        "Листинг 3.2 — Общая проверка возможности update",
+        """
+def changed_fields(self, resource: ResourceState) -> set[str]:
+    old_payload = resource.config_payload
+    if not old_payload:
+        return set()
+    new_payload = self.fingerprint_payload()
+    return {
+        key
+        for key in old_payload.keys() | new_payload.keys()
+        if old_payload.get(key) != new_payload.get(key)
+    }
+
+def can_update(self, resource: ResourceState) -> bool:
+    if resource.resource_type != self.resource_type:
+        return False
+    changed = self.changed_fields(resource)
+    return bool(changed) and changed <= self.updatable_fields
+""",
+    )
     add_section(builder, "4 Реализация программного средства", IMPLEMENTATION)
     builder.image("apply-sequence.png", diagrams["apply"], width_cm=13.5)
     builder.paragraph("Рисунок 4.1 — Последовательность выполнения команды apply", "caption")
+    builder.paragraph(
+        "Ключевой фрагмент планировщика приведен в листинге 4.1. Он показывает, как на основе state и текущего обработчика выбирается create, update, replace или noop. Этот код является ядром декларативного поведения инструмента.",
+    )
+    add_inline_listing(
+        builder,
+        "Листинг 4.1 — Выбор типа изменения в планировщике",
+        """
+if current is None:
+    decisions[handler.logical_name] = ChangeKind.CREATE
+elif current.resource_type != handler.resource_type:
+    decisions[handler.logical_name] = ChangeKind.REPLACE
+elif current.config_hash != handler.config_hash() and handler.can_update(current):
+    decisions[handler.logical_name] = ChangeKind.UPDATE
+elif current.config_hash != handler.config_hash():
+    decisions[handler.logical_name] = ChangeKind.REPLACE
+else:
+    decisions[handler.logical_name] = ChangeKind.NOOP
+""",
+    )
+    builder.paragraph(
+        "Выполнение плана построено по паттерну Command. Листинг 4.2 демонстрирует update-команду: она получает ресурс из state, вызывает полиморфный метод update у обработчика, затем сохраняет обновленное состояние.",
+    )
+    add_inline_listing(
+        builder,
+        "Листинг 4.2 — Команда обновления ресурса",
+        """
+class UpdateResourceCommand(PlanCommand):
+    handler: CloudResourceHandler
+    reason: str
+
+    def execute(self, facade, state, state_store) -> None:
+        resource = state.get(self.handler.logical_name)
+        if resource is None:
+            raise ExecutionError(f"Resource '{self.logical_name}' is missing from state")
+        updated = self.handler.update(facade, state, resource)
+        state.put(updated)
+        state_store.save(state)
+""",
+    )
     add_subsection(
         builder,
         "4.1 Пользовательский сценарий работы",
