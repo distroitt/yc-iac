@@ -615,8 +615,8 @@ def add_appendix_code(builder: DocxBuilder) -> None:
         lines = path.read_text(encoding="utf-8").splitlines()
         selected = lines[start - 1 : end]
         builder.paragraph(f"Листинг А.{number} — Фрагмент файла {relative}", "caption")
-        for offset, line in enumerate(selected, start=start):
-            builder.paragraph(f"{offset:04d}: {line}", "code")
+        for line in selected:
+            builder.paragraph(line, "code")
 
 
 def content_types_xml() -> str:
