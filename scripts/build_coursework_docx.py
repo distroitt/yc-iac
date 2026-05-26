@@ -447,18 +447,17 @@ def add_appendix_code(builder: DocxBuilder) -> None:
     builder.paragraph("Приложение А", "heading0")
     builder.paragraph("Листинг программного кода", "heading0")
     builder.paragraph(
-        "В приложении приведены фрагменты исходного кода, демонстрирующие основные объектно-ориентированные решения проекта: модели состояния, планировщик, команды плана, обработчики ресурсов, фасад облачного SDK и CLI-слой.",
+        "В приложении приведены только ключевые фрагменты исходного кода, демонстрирующие основные объектно-ориентированные решения проекта: модель состояния, алгоритм выбора update/replace, команды плана, обработчик виртуальной машины, фасад облачного SDK и CLI-обработку ошибок.",
     )
     snippets = [
-        ("src/iac_tool/state.py", 1, 90),
-        ("src/iac_tool/planner.py", 1, 240),
-        ("src/iac_tool/commands.py", 1, 190),
-        ("src/iac_tool/resources.py", 1, 470),
-        ("src/iac_tool/facade.py", 1, 180),
-        ("src/iac_tool/facade.py", 600, 890),
-        ("src/iac_tool/cli.py", 1, 240),
-        ("tests/test_planner.py", 1, 220),
-        ("tests/test_executor.py", 1, 340),
+        ("src/iac_tool/state.py", 10, 70),
+        ("src/iac_tool/planner.py", 78, 150),
+        ("src/iac_tool/commands.py", 34, 125),
+        ("src/iac_tool/resources.py", 30, 88),
+        ("src/iac_tool/resources.py", 320, 455),
+        ("src/iac_tool/facade.py", 740, 830),
+        ("src/iac_tool/cli.py", 170, 220),
+        ("tests/test_planner.py", 398, 492),
     ]
     for number, (relative, start, end) in enumerate(snippets, start=1):
         path = ROOT / relative
